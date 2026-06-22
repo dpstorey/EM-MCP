@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tenable OT MCP — First-run setup</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --error: #f87171;
+      --success: #4ade80;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .container { max-width: 640px; margin: 0 auto; }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    .lede { color: var(--muted); margin: 0 0 32px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    label { display: block; font-weight: 600; margin: 16px 0 4px; }
+    label:first-child { margin-top: 0; }
+    .hint { color: var(--muted); font-size: 13px; font-weight: 400; margin: 4px 0 0; }
+    input[type=text], input[type=url], input[type=password] {
+      width: 100%;
+      padding: 10px 12px;
+      background: #0b1220;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 14px;
+    }
+    input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+    .row { display: flex; align-items: center; gap: 8px; margin: 16px 0; }
+    .row input[type=checkbox] { width: 18px; height: 18px; }
+    button {
+      background: var(--accent);
+      color: #0f172a;
+      border: 0;
+      padding: 12px 20px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      margin-top: 24px;
+    }
+    button:hover { filter: brightness(1.1); }
+    .error {
+      background: #4a1d1d;
+      border: 1px solid var(--error);
+      color: #fecaca;
+      padding: 12px 16px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+    }
+    .danger {
+      background: #4a2a08;
+      border: 1px solid #f59e0b;
+      color: #fde68a;
+      padding: 12px 16px;
+      border-radius: 6px;
+      margin-top: 12px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .danger strong { color: #fbbf24; }
+    .danger ul { margin: 6px 0 0 18px; padding: 0; }
+    .footer { color: var(--muted); font-size: 13px; margin-top: 24px; text-align: center; }
+    code {
+      background: #0b1220;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Tenable OT MCP Server</h1>
+    <p class="lede">First-run setup. Configure once, then point your AI clients at this server.</p>
+
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/setup">
+      <div class="panel">
+        <h2 style="margin: 0 0 16px; font-size: 16px;">1 — Connect to Tenable OT Security or Enterprise Manager</h2>
+
+         <label for="tenable_url">Tenable OT / EM server URL</label>
+        <input type="url" id="tenable_url" name="tenable_url" required
+               placeholder="https://tots.example.com"
+               value="{{ form.tenable_url or '' }}">
+         <div class="hint">Use your direct ICP appliance URL or Enterprise Manager URL. The server posts setup validation GraphQL to <code>&lt;url&gt;/graphql</code>. Site-level routing is selected per query tool call using <code>site_uuid</code> or <code>site_name</code>.</div>
+
+        <label for="tenable_api_key">Service-account API key</label>
+        <input type="password" id="tenable_api_key" name="tenable_api_key" required
+               placeholder="••••••••••••••••"
+               autocomplete="new-password"
+               value="{{ form.tenable_api_key or '' }}">
+        <div class="hint">Generated in Tenable OT Security / EM under <strong>Settings → User Management → API Keys</strong>. Use a service account, not a personal account.</div>
+
+        <div class="row">
+          <input type="checkbox" id="tls_verify" name="tls_verify"
+                 {% if form.tls_verify %}checked{% endif %}>
+          <label for="tls_verify" style="margin: 0;">Verify TLS certificate</label>
+        </div>
+        <div class="hint">Leave on unless your Tenable OT/EM endpoint uses a self-signed certificate.</div>
+      </div>
+
+      <div class="panel">
+        <h2 style="margin: 0 0 16px; font-size: 16px;">2 — Choose what AI clients can do</h2>
+
+        <div class="row">
+          <input type="checkbox" id="write_tools_enabled" name="write_tools_enabled"
+                 {% if form.write_tools_enabled %}checked{% endif %}>
+          <label for="write_tools_enabled" style="margin: 0;">Enable write tools</label>
+        </div>
+        <div class="hint">
+          Off by default — leave off for a read-only deployment.
+        </div>
+        <div class="danger">
+          <strong>⚠ Read this before enabling.</strong>
+          Write tools mutate live state in your Tenable OT deployment. Anyone who holds the
+          bearer token (or any AI client you connect with that token) can take these actions.
+          Each tool defaults to <code>dry_run=true</code>, but the AI is allowed to call again
+          with <code>dry_run=false</code> on its own — your operator workflow is the only thing
+          that prevents an AI from applying changes you didn't intend.
+          <ul>
+            <li><strong>Asset state:</strong> hide / restore / mark assets pending deletion,
+              recalculate risk, create / update / archive asset groups (tags).</li>
+            <li><strong>Detection coverage:</strong> enable / disable / archive detection
+              policies (single and bulk). Disabling a policy stops it from firing; misuse
+              creates real visibility gaps.</li>
+            <li><strong>Findings:</strong> bulk-resolve findings matching a filter — closing
+              alerts you may not have triaged.</li>
+            <li><strong>Active scans:</strong> define / edit / enable / disable / delete
+              scan jobs. The server <em>defines</em> them; a human operator runs them from
+              the Tenable OT UI. Active scanning has caused operational incidents on legacy
+              PLCs in the wild.</li>
+          </ul>
+          You can change this later by deleting <code>/data/config.enc</code> and re-running
+          setup. Until then, treat the bearer token as you would a service-account password
+          with these capabilities.
+        </div>
+      </div>
+
+      <button type="submit">Save and generate tokens</button>
+    </form>
+
+    <p class="footer">
+      Tenable OT MCP Server — open source, Apache 2.0<br>
+      A <a href="https://1clearpath.com" style="color: var(--accent);">OneClearPath, Incorporated</a> project · Author: John Walley<br>
+      Independent project. Not affiliated with Tenable, Inc.
+    </p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,194 @@
+# SPDX-License-Identifier: Apache-2.0
+# GitLab CI/CD pipeline for tenable-ot-mcp.
+#
+# Stages:
+#   lint     — ruff + mypy on every push / merge request
+#   test     — pytest on every push / merge request
+#   build    — build wheel + multi-arch Docker image (amd64, arm64)
+#   scan     — Trivy CVE scan + SBOM (syft) on the image
+#   sign     — cosign keyless via OIDC on tagged releases
+#   release  — publish image to GitLab Container Registry on tag push
+#
+# Triggers:
+#   - Push to main / merge requests: lint, test, build (no push)
+#   - Tag push (e.g. v1.0.0): full pipeline including sign + publish
+#
+# Required CI/CD variables (set in project settings):
+#   None for public release (uses GitLab's built-in $CI_REGISTRY_*).
+#   Cosign signing uses GitLab's OIDC token; no manual key required.
+
+default:
+  image: python:3.12.7-slim-bookworm
+  before_script:
+    - python -m pip install --upgrade pip==24.3.1
+  cache:
+    key:
+      files:
+        - pyproject.toml
+    paths:
+      - .cache/pip
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  IMAGE_NAME: "$CI_REGISTRY_IMAGE"
+
+stages:
+  - lint
+  - test
+  - build
+  - scan
+  - sign
+  - release
+
+# ---------- lint ----------
+lint:
+  stage: lint
+  script:
+    - pip install ruff==0.6.9 mypy==1.10.0
+    - ruff check src tests
+    - ruff format --check src tests
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+# ---------- test ----------
+test:
+  stage: test
+  script:
+    - pip install -e ".[dev]"
+    - pytest -v --tb=short
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+# ---------- build ----------
+# Per-commit pushes: quick single-arch (amd64) Docker build to keep CI fast.
+# Tag pushes: multi-arch buildx (amd64 + arm64), pushed to the GitLab
+# Container Registry with version / major.minor / major / latest tags.
+build:
+  stage: build
+  image: docker:27.3.1
+  services:
+    - docker:27.3.1-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_CERT_PATH: "/certs/client"
+    DOCKER_TLS_VERIFY: "1"
+  before_script:
+    - docker info
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        VERSION="${CI_COMMIT_TAG#v}"
+        MAJOR="${VERSION%%.*}"
+        MAJOR_MINOR="${VERSION%.*}"
+        echo "Tag build: multi-arch + push for $VERSION"
+        docker run --privileged --rm tonistiigi/binfmt:latest --install all
+        # Newer buildx refuses to read dind TLS settings from env vars
+        # implicitly; create an explicit docker context that points at
+        # the dind service with the cert paths, then bind the buildx
+        # builder to that context.
+        docker context create dind \
+          --docker "host=tcp://docker:2376,ca=/certs/client/ca.pem,cert=/certs/client/cert.pem,key=/certs/client/key.pem"
+        docker buildx create --name builder --use --bootstrap dind
+        docker buildx build \
+          --platform linux/amd64,linux/arm64 \
+          -t "$IMAGE_NAME:$VERSION" \
+          -t "$IMAGE_NAME:$MAJOR_MINOR" \
+          -t "$IMAGE_NAME:$MAJOR" \
+          -t "$IMAGE_NAME:latest" \
+          --push \
+          --provenance=true \
+          --sbom=true \
+          .
+      else
+        echo "Branch build: single-arch (amd64), no push"
+        docker build -t "$IMAGE_NAME:dev-$CI_COMMIT_SHORT_SHA" .
+      fi
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+# ---------- scan ----------
+# Trivy CVE scan on tagged release images only. Per-commit images aren't
+# pushed to the registry, so there's nothing for Trivy to scan.
+scan:
+  stage: scan
+  image:
+    name: aquasec/trivy:0.56.2
+    entrypoint: [""]
+  # The default before_script pip-installs into the image; the trivy
+  # image has no python, so override.
+  before_script: []
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    # SARIF report covers all HIGH+CRITICAL for visibility (never blocks).
+    - trivy image --severity HIGH,CRITICAL --exit-code 0 --format sarif -o trivy-report.sarif "$IMAGE_NAME:$VERSION" || true
+    # Gate fails on CRITICAL only, but skips advisories upstream hasn't
+    # patched yet (`--ignore-unfixed`) — releases shouldn't be blocked
+    # by Debian-marked `will_not_fix` issues we cannot resolve in this
+    # repo. Re-published images pick up fixes once they ship upstream.
+    - trivy image --severity CRITICAL --exit-code 1 --ignore-unfixed "$IMAGE_NAME:$VERSION"
+  artifacts:
+    when: always
+    paths:
+      - trivy-report.sarif
+    reports:
+      sast: trivy-report.sarif
+  rules:
+    - if: $CI_COMMIT_TAG
+
+# ---------- sign ----------
+# Keyless cosign signing via GitLab's OIDC. Only on tagged releases.
+sign:
+  stage: sign
+  # The official sigstore cosign image is distroless (no shell), which
+  # GitLab CI's docker executor refuses to launch. We install the
+  # cosign binary at job start in a shell-capable alpine image. For
+  # keyless signing we need GitLab to mint an OIDC token with the
+  # `sigstore` audience and expose it as `SIGSTORE_ID_TOKEN` — cosign
+  # reads that env var automatically and skips the interactive device
+  # flow it would otherwise fall back to.
+  image: alpine:3.19
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  variables:
+    COSIGN_VERSION: "v2.4.1"
+    COSIGN_EXPERIMENTAL: "1"
+  before_script:
+    - apk add --no-cache curl
+    - curl -fsSL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" -o /usr/local/bin/cosign
+    - chmod +x /usr/local/bin/cosign
+    - cosign version
+  script:
+    - cosign login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - cosign sign --yes "$IMAGE_NAME:$VERSION"
+  rules:
+    - if: $CI_COMMIT_TAG
+
+# ---------- release ----------
+# Publishes a GitLab Release linked to the tag and image.
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  before_script: []
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - echo "Publishing release for $CI_COMMIT_TAG"
+  release:
+    name: "$CI_COMMIT_TAG"
+    tag_name: "$CI_COMMIT_TAG"
+    description: |
+      Tenable OT MCP Server $CI_COMMIT_TAG
+
+      Pull this version:
+        docker pull $IMAGE_NAME:${CI_COMMIT_TAG#v}
+
+      See [CHANGELOG.md](CHANGELOG.md) for what's new.

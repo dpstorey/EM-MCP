@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tenable OT MCP — Setup complete</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --warning: #fbbf24;
+      --success: #4ade80;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .container { max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    .lede { color: var(--muted); margin: 0 0 32px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    .warning {
+      background: #4a3700;
+      border: 1px solid var(--warning);
+      color: #fde68a;
+      padding: 12px 16px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+    }
+    .success {
+      background: #133024;
+      border: 1px solid var(--success);
+      color: #bbf7d0;
+      padding: 12px 16px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+    }
+    h2 { font-size: 16px; margin: 0 0 12px; }
+    .token-box {
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 16px;
+      margin: 8px 0 16px;
+      font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+      font-size: 13px;
+      word-break: break-all;
+      user-select: all;
+    }
+    .label {
+      display: inline-block;
+      background: var(--accent);
+      color: var(--bg);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .label-write { background: var(--warning); }
+    .footer { color: var(--muted); font-size: 13px; margin-top: 24px; text-align: center; }
+    code {
+      background: #0b1220;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .btn {
+      display: inline-block;
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      border-radius: 6px;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .btn:disabled { opacity: 0.5; cursor: progress; }
+    .status-line { color: var(--muted); font-size: 13px; margin-top: 12px; }
+    .status-line.ok { color: var(--success); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Setup complete</h1>
+    <p class="lede">The MCP server is configured and ready. Save your bearer token now — it will not be shown again.</p>
+
+    <div class="success">
+      <strong>✓ Connection to Tenable OT/EM verified.</strong> The server can reach your configured endpoint and authenticate with the supplied key.
+    </div>
+
+    <div class="warning">
+      <strong>⚠ Copy this token now.</strong> It is stored encrypted on disk but the server will refuse to display it again. Treat it like a password — anyone holding it can act through this server with whichever capabilities you enabled.
+    </div>
+
+    <div class="panel">
+      <span class="label{% if write_tools_enabled %} label-write{% endif %}">Bearer token</span>
+      <h2>{% if write_tools_enabled %}Read + write capable{% else %}Read-only{% endif %}</h2>
+      <div class="token-box">{{ bearer_token }}</div>
+      <p style="margin: 0; color: var(--muted); font-size: 13px;">
+        {% if write_tools_enabled %}
+          This token exposes both read tools (queries, fetches, listings) AND write tools
+          (hide / restore / remove assets, enable / disable / archive detection policies,
+          resolve findings, define active scans, recalculate risk). Every write tool defaults
+          to <code>dry_run=true</code>; the AI must be re-prompted with <code>dry_run=false</code>
+          to apply changes.
+        {% else %}
+          This token exposes only the read tools (queries, fetches, listings). To enable
+          mutations, delete <code>/data/config.enc</code> and re-run setup with the
+          <strong>Enable write tools</strong> box checked.
+        {% endif %}
+      </p>
+    </div>
+
+    <div class="panel">
+      <h2>Next steps</h2>
+      <p style="margin: 0 0 8px;">
+        <strong>1. Restart the container.</strong> The setup wizard saved your configuration to disk;
+        restart so the MCP endpoint comes up against it. With Docker:
+        <code>docker restart &lt;container&gt;</code>.
+      </p>
+      <p style="margin: 12px 0 12px;">
+        <button id="finish-btn" class="btn" type="button">I've restarted — finish</button>
+      </p>
+      <div id="finish-status" class="status-line" style="display: none;"></div>
+
+      <p style="margin: 16px 0 8px;"><strong>2. Point your MCP client at:</strong></p>
+      <div class="token-box" style="user-select: text;">{{ mcp_url }}</div>
+      <p style="margin: 0; color: var(--muted); font-size: 13px;">
+        For OAuth-aware clients, the metadata document is at
+        <code>/.well-known/oauth-protected-resource</code> and advertises bearer-token authentication
+        per RFC 9728.
+      </p>
+    </div>
+
+    <script>
+      // Poll /healthz after the user clicks Finish. The container is
+      // restarting, so the endpoint is unreachable for a while; that's
+      // expected. Once it returns configured:true we know the saved
+      // config has been picked up and the MCP endpoint is live.
+      (function () {
+        const btn = document.getElementById("finish-btn");
+        const status = document.getElementById("finish-status");
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          status.style.display = "block";
+          status.classList.remove("ok");
+          status.textContent = "Waiting for the server to come back up…";
+
+          for (let attempt = 0; attempt < 80; attempt++) {
+            try {
+              const res = await fetch("/healthz", { cache: "no-store" });
+              if (res.ok) {
+                const data = await res.json();
+                if (data.configured) {
+                  status.classList.add("ok");
+                  status.innerHTML =
+                    "✓ Server is up and configured. You can close this tab and connect your MCP client.";
+                  btn.textContent = "Finished";
+                  return;
+                }
+                status.textContent =
+                  "Server is up but not yet configured. Retrying…";
+              }
+            } catch (_e) {
+              status.textContent = "Container restarting…";
+            }
+            await sleep(1500);
+          }
+          status.textContent =
+            "Timed out waiting for the server. Check 'docker logs <container>' and reload this page.";
+          btn.disabled = false;
+        });
+      })();
+    </script>
+
+    <p class="footer">
+      Tenable OT MCP Server — open source, Apache 2.0<br>
+      A <a href="https://1clearpath.com" style="color: var(--accent);">OneClearPath, Incorporated</a> project · Author: John Walley<br>
+      Independent project. Not affiliated with Tenable, Inc.
+    </p>
+  </div>
+</body>
+</html>

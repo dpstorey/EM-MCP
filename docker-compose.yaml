@@ -1,0 +1,22 @@
+services:
+  tenable-ot:
+    container_name: tot-mcp
+
+    build:
+      context: .
+
+    image: tenable-ot-mcp:local
+
+    ports:
+      - "3306:40443"
+
+    environment:
+      MCP_TLS_DISABLE: "1"
+
+    volumes:
+      - tenable-ot-mcp-data:/data
+
+    restart: unless-stopped
+
+volumes:
+  tenable-ot-mcp-data:
