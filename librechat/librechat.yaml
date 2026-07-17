@@ -1,0 +1,146 @@
+version: 1.3.12
+cache: true
+
+endpoints:
+  custom:
+    - name: "Ollama"
+      apiKey: "ollama"
+      baseURL: "http://host.docker.internal:11434/v1"
+      
+      models:
+        default:
+          - barossa-chat
+          - barossa-code
+          - barossa-reason
+          - barossa-fast
+        fetch: true
+
+    - name: "llama.cpp"
+      apiKey: "dummy"
+      baseURL: "http://172.17.0.1:8081/v1"
+      models:
+        default:
+          - holo-3.1-35b-a3b
+      fetch: false
+      
+      titleConvo: true
+      titleModel: "current_model"
+      summarize: false
+      summaryModel: "current_model"
+      forcePrompt: false
+      modelDisplayLabel: "Ollama"
+      maxContextTokens: 65536
+      # Tool calling configuration
+      tools: true
+      toolChoice: "auto"
+      # Enable MCP tools for this endpoint
+      mcp:
+        enabled: true
+        servers:
+          - filesystem
+
+
+interface:
+  fileSearch: true
+
+fileConfig:
+  endpoints:
+    default:
+      fileLimit: 5
+      fileSizeLimit: 200
+      totalSizeLimit: 200
+      supportedMimeTypes:
+        - "text/plain"
+        - "text/markdown"
+        - "application/pdf"
+        - "image/png"
+        - "image/jpeg"
+        - "image/webp"
+        - "text/plain"
+        - '^text/x-h$'
+        - '^text/x-c$'
+        - '^text/x-csrc$'
+        - '^text/x-chdr$'
+        - '^text/x-c\+\+$'
+        - '^text/x-c\+\+src$'
+        - '^text/x-c\+\+hdr$'
+    Ollama:
+      fileLimit: 5
+      fileSizeLimit: 200
+      totalSizeLimit: 200
+      supportedMimeTypes:
+        - "text/plain"
+        - "text/markdown"
+        - "application/pdf"
+        - "image/png"
+        - "image/jpeg"
+        - "image/webp"
+        - "text/plain"
+        - '^text/x-h$'
+        - '^text/x-c$'
+        - '^text/x-csrc$'
+        - '^text/x-chdr$'
+        - '^text/x-c\+\+$'
+        - '^text/x-c\+\+src$'
+        - '^text/x-c\+\+hdr$'
+
+mcpSettings:
+  allowedDomains:
+    - "https://cloud.tenable.com"
+    - "https://em.barossafarm.com:40443"
+    - "http://localhost"
+    - "http://workspace-shell-mcp:8000"
+
+mcpServers:
+#  tenable-ot:
+#    type: streamable-http
+#    url: "https://london.barossafarm.com:40443/mcp"
+#    timeout: 120000
+#    requiresOAuth: false
+#    headers:
+#      Authorization: "Bearer ${TOT_MCP_TOKEN}"
+
+  filesystem:
+    type: stdio
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-filesystem"
+      - "/llm-scratch"  
+
+  workspace-shell:
+    type: streamable-http
+    url: http://workspace-shell-mcp:8000/mcp
+
+
+  tenable-ot-em:
+    type: streamable-http
+    url: "https://em.barossafarm.com:40443/mcp"
+    timeout: 120000
+    requiresOAuth: false
+    headers:
+      Authorization: "Bearer ${EM_MCP_TOKEN}"
+
+  hexa:
+    type: streamable-http
+    url: "https://cloud.tenable.com/mcp"
+    timeout: 120000
+    requiresOAuth: false
+    headers:
+      X-ApiKeys: "accessKey=${T1_ACCESS_KEY};secretKey=${T1_SECRET_KEY}"
+
+  jupyter:
+    type: stdio
+    command: uvx
+    args:
+      - mcp-server-jupyter
+    env:
+      JUPYTER_SERVER_URL: ${JUPYTER_SERVER_URL}
+      JUPYTER_TOKEN: ${JUPYTER_MCP_TOKEN}
+    timeout: 120000
+
+webSearch:
+  serperApiKey: "${SERPER_API_KEY}"
+  searchProvider: "serper"
+  scraperType: "serper"
+  rerankerType: "none"      
