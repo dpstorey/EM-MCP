@@ -14,9 +14,7 @@ services:
       MCP_TLS_DISABLE: "1"
 
     volumes:
-      - tenable-ot-mcp-data:/data
+      - ./tenable-ot-mcp-data:/data
 
     restart: unless-stopped
 
-volumes:
-  tenable-ot-mcp-data:
