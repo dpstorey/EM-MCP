@@ -28,6 +28,7 @@ def register_read_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> Non
         policies,
         scans,
         sensors,
+        status,
         summary,
         topology,
         vulns,
@@ -43,6 +44,7 @@ def register_read_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> Non
     summary.register_read_tools(mcp, client, audit)
     scans.register_read_tools(mcp, client, audit)
     groups.register_read_tools(mcp, client, audit)
+    status.register_read_tools(mcp, client, audit)
     em.register_read_tools(mcp, client, audit)
 
 

@@ -34,44 +34,87 @@ from ._shared import clamp_page_size, project_vuln, unwrap_nodes
 # GraphQL fragments + queries
 # ----------------------------------------------------------------------
 
-_VULN_FIELDS = """
-  id
-  name
-  source
-  family
-  severity
-  vprScore
-  vprLevel
-  cvss3Score
-  totalAffectedAssets
-  totalFixedAssets
-  details {
-    description
-    solution
-    cves
-    cvssV3BaseScore
-    cvssV3Vector
-    exploitAvailable
-    exploitedByMalware
-    cisaKnownExploitedDates
-    threatRecency
-    threatIntensity
-    exploitCodeMaturity
-    pluginPubDate
-    vulnPubDate
-    ageOfVuln
-  }
-"""
+# Field whitelist registry: natural name → (top-level field, details subfield)
+_FIELD_REGISTRY: dict[str, tuple[str | None, str | None]] = {
+    "plugin_id": ("id", None),
+    "name": ("name", None),
+    "source": ("source", None),
+    "family": ("family", None),
+    "severity": ("severity", None),
+    "vpr_score": ("vprScore", None),
+    "vpr_level": ("vprLevel", None),
+    "cvss3_score": ("cvss3Score", None),
+    "total_affected_assets": ("totalAffectedAssets", None),
+    "total_fixed_assets": ("totalFixedAssets", None),
+    "description": (None, "description"),
+    "solution": (None, "solution"),
+    "cves": (None, "cves"),
+    "cvss_v3_base_score": (None, "cvssV3BaseScore"),
+    "cvss_v3_vector": (None, "cvssV3Vector"),
+    "exploit_available": (None, "exploitAvailable"),
+    "exploited_by_malware": (None, "exploitedByMalware"),
+    "cisa_known_exploited_dates": (None, "cisaKnownExploitedDates"),
+    "threat_recency": (None, "threatRecency"),
+    "threat_intensity": (None, "threatIntensity"),
+    "exploit_code_maturity": (None, "exploitCodeMaturity"),
+    "plugin_pub_date": (None, "pluginPubDate"),
+    "vuln_pub_date": (None, "vulnPubDate"),
+    "age_of_vuln": (None, "ageOfVuln"),
+}
 
-_QUERY_VULNS = (
-    "query Q($pageSize: Int!, $after: String, "
-    "$filter: PluginExpressionsParams, $search: String) { "
-    "plugins(first: $pageSize, after: $after, filter: $filter, search: $search) { "
-    "pageInfo { hasNextPage endCursor } totalCount "
-    "nodes { " + _VULN_FIELDS + " } "
-    "} "
-    "}"
-)
+# Default lean field set for triage (no description/solution ~4KB blobs)
+_LIST_DEFAULT_FIELDS = [
+    "plugin_id", "name", "severity", "vpr_score", "vpr_level", "cvss3_score",
+    "total_affected_assets", "family", "source", "cves", "exploit_available",
+]
+
+
+def _resolve_fields(requested: list[str] | None) -> list[str]:
+    """Validate and normalize the requested field list against the whitelist.
+
+    Returns the lean default set if requested is None/empty. Always includes
+    plugin_id. Raises ValueError if unknown fields are requested.
+    """
+    if not requested:
+        return _LIST_DEFAULT_FIELDS
+
+    unknown = [f for f in requested if f not in _FIELD_REGISTRY]
+    if unknown:
+        raise ValueError(
+            f"Unknown fields: {unknown}. Valid options: {sorted(_FIELD_REGISTRY.keys())}"
+        )
+
+    # Deduplicate, preserve order, ensure plugin_id is present
+    seen = set()
+    out = []
+    for f in (["plugin_id"] + requested):
+        if f not in seen:
+            seen.add(f)
+            out.append(f)
+    return out
+
+
+def _build_selection(fields: list[str]) -> str:
+    """Build GraphQL selection from whitelisted field names.
+
+    Separates top-level fields from details subfields to construct the
+    proper nested shape. User input never reaches the query text directly.
+    """
+    top_level = []
+    details_sub = []
+
+    for natural_name in fields:
+        top_field, detail_field = _FIELD_REGISTRY[natural_name]
+        if top_field:
+            top_level.append(top_field)
+        if detail_field:
+            details_sub.append(detail_field)
+
+    parts = top_level.copy()
+    if details_sub:
+        parts.append("details { " + " ".join(details_sub) + " }")
+
+    return " ".join(parts)
 
 
 _AFFECTED_ASSET_FIELDS = "id name type vendor model criticality firstSeen lastSeen"

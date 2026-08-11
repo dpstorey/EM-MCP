@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Any
 
 import httpx
@@ -166,6 +167,31 @@ class TenableClient:
             return bool(data)
         except TenableError:
             return False
+
+    async def connection_status(self) -> dict[str, Any]:
+        """Probe the backend appliance and report the outcome in detail.
+
+        Runs the same trivial query as `healthcheck` but keeps the error
+        text and round-trip latency so a caller can explain *why* the
+        appliance is unreachable, not just that it is. This is the data
+        source for the `tenable_ot_status` tool.
+        """
+        started = time.perf_counter()
+        try:
+            await self.query("{ __typename }")
+        except TenableError as e:
+            return {
+                "connected": False,
+                "tenable_url": self.base_url,
+                "latency_ms": round((time.perf_counter() - started) * 1000),
+                "error": str(e),
+            }
+        return {
+            "connected": True,
+            "tenable_url": self.base_url,
+            "latency_ms": round((time.perf_counter() - started) * 1000),
+            "error": None,
+        }
 
     async def query_em(
         self,
