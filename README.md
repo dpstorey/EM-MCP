@@ -1,6 +1,6 @@
 ## Enterprise Manager version of John Walley's Tenable OT MCP
 
-**Version**: 1.1 (based on GitLab tenable-ot-mcp v0.4.5)  
+**Version**: 1.28.1 (based on GitLab tenable-ot-mcp v0.4.5)  
 **Upstream**: https://gitlab.com/jwalley/tenable-ot-mcp  
 **Modified**: 2026-07-27
 
@@ -18,6 +18,9 @@
 3. Run `mcp build` to build the docker image
 4. Run `mcp run` to start the container
 5. Use the prompt in `prompt/AGENT.md` 
+
+### Tool List
+A categorized tool list document is available in file `tot-mcp-tool-list.md`.
 
 ### Recent Updates (v1.1)
 
