@@ -1,0 +1,12 @@
+services:
+  tenable-ot:
+    container_name: tot-mcp-em
+
+    networks:
+      default:
+      ai-services:
+
+networks:
+  ai-services:
+    external: true
+    name: ai-services

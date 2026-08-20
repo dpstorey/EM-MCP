@@ -12,24 +12,14 @@ ENV PIP_NO_CACHE_DIR=1 \
 
 WORKDIR /build
 
-RUN pip install --upgrade pip==24.3.1 build==1.2.2 hatchling==1.26.3
+RUN pip install --upgrade pip==24.3.1
 
 COPY pyproject.toml README.md LICENSE NOTICE ./
 COPY src/ ./src/
 
-RUN python -m build --wheel --outdir /wheels && \
-    pip wheel --no-deps --wheel-dir /wheels /wheels/*.whl
-
-# Resolve runtime deps to a fixed set of wheels.
-RUN pip wheel --wheel-dir /wheels \
-    "mcp[cli]>=1.2.0" \
-    "httpx>=0.27" \
-    "uvicorn[standard]>=0.30" \
-    "starlette>=0.37" \
-    "cryptography>=43" \
-    "click>=8.1" \
-    "jinja2>=3.1" \
-    "pydantic>=2.7"
+# Build the application and all runtime dependencies declared in
+# pyproject.toml into an offline wheelhouse for the runtime image.
+RUN pip wheel --wheel-dir /wheels .
 
 # ---------- Stage 2: runtime ----------
 FROM python:3.12.7-slim-bookworm

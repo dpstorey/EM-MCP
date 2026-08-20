@@ -3,12 +3,12 @@ services:
     container_name: tot-mcp
 
     build:
-      context: .
+      context: ./tenable-ot-mcp
 
     image: tenable-ot-mcp:local
 
     ports:
-      - "3306:40443"
+      - "3308:40443"
 
     environment:
       MCP_TLS_DISABLE: "1"
@@ -16,5 +16,19 @@ services:
     volumes:
       - ./tenable-ot-mcp-data:/data
 
-    restart: unless-stopped
+    # TLS terminates at the reverse proxy in this deployment, so the
+    # container-local health check must use its plain-HTTP listener.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:40443/healthz', timeout=3).status == 200 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
+    restart: unless-stopped

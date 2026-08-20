@@ -117,6 +117,22 @@ def _build_selection(fields: list[str]) -> str:
     return " ".join(parts)
 
 
+# Build the static query fragments from the whitelist.  The field-registry
+# refactor replaced the former literal _VULN_FIELDS fragment, so both queries
+# must be reconstructed before they are referenced below.
+_VULN_FIELDS = _build_selection(list(_FIELD_REGISTRY))
+
+_QUERY_VULNS = (
+    "query Q($pageSize: Int!, $after: String, "
+    "$filter: PluginExpressionsParams, $search: String) { "
+    "plugins(first: $pageSize, after: $after, filter: $filter, search: $search) { "
+    "pageInfo { hasNextPage endCursor } totalCount "
+    "nodes { " + _VULN_FIELDS + " } "
+    "} "
+    "}"
+)
+
+
 _AFFECTED_ASSET_FIELDS = "id name type vendor model criticality firstSeen lastSeen"
 
 _GET_VULN = (
