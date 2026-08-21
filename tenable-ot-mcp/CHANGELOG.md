@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Asset-scoped event queries** — `query_events(asset_id=...)` now traverses
+  the asset's event connection while preserving filters and pagination.
+- **Native CIDR asset filtering** — `query_assets(subnet=...)` validates CIDR
+  input and translates it to Tenable's native inclusive IP-range filter.
 - **Multi-site read fan-out** — collection, search, list, and summary tools
   accept `site_uuids` and query the selected ICPs with bounded concurrency.
   Responses retain per-site provenance, pagination state, and partial errors.

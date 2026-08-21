@@ -164,6 +164,44 @@ async def test_query_assets_fans_out_and_preserves_site_provenance() -> None:
     assert "after" not in asset_queries[1]["variables"]
 
 
+async def test_query_assets_translates_subnet_to_native_ip_range() -> None:
+    client = FakeClient(
+        [
+            {
+                "assets": {
+                    "nodes": [{"id": "asset-1", "ips": {"nodes": ["10.253.10.244"]}}],
+                    "totalCount": 1,
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            },
+            {"customFields": []},
+        ]
+    )
+    mcp = FakeMCP()
+    register_read_tools(mcp, client, None)  # type: ignore[arg-type]
+
+    result = await mcp.tools["query_assets"](
+        site_uuid="site-a",
+        subnet="10.253.10.128/25",
+    )
+
+    assert client.query_calls[0]["variables"]["filter"] == {
+        "field": "ips",
+        "op": "Between",
+        "values": ["10.253.10.128", "10.253.10.255"],
+    }
+    assert result["assets"][0]["ips"] == ["10.253.10.244"]
+
+
+async def test_query_assets_rejects_invalid_subnet() -> None:
+    client = FakeClient([])
+    mcp = FakeMCP()
+    register_read_tools(mcp, client, None)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="invalid subnet CIDR"):
+        await mcp.tools["query_assets"](site_uuid="site-a", subnet="10.253.10.999/25")
+
+
 async def test_multi_site_read_returns_partial_failures() -> None:
     client = FakeClient(
         [

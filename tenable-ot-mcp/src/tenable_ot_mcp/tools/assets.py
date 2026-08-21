@@ -14,6 +14,7 @@ values before the GraphQL goes out.
 
 from __future__ import annotations
 
+import ipaddress
 import time
 from typing import Any
 
@@ -22,6 +23,7 @@ from ..tenable_client import TenableClient
 from ._enums import (
     ASSET_KIND_VALUES,
     CRITICALITY_VALUES,
+    EXPR_BETWEEN,
     EXPR_EQUAL,
     EXPR_IN,
     EXPR_LIKE,
@@ -229,6 +231,7 @@ def _build_asset_filter(
     category: str | None,
     criticality_at_least: str | None,
     hidden: bool | None,
+    subnet: str | None = None,
 ) -> dict | None:
     """Build a Tenable `AssetExpressionsParams` tree from natural args.
     Returns None when no filter is needed.
@@ -256,6 +259,18 @@ def _build_asset_filter(
         parts.append(expr("criticality", EXPR_IN, to_criticality_at_least(criticality_at_least)))
     if hidden is not None:
         parts.append(expr("hidden", EXPR_EQUAL, [bool(hidden)]))
+    if subnet:
+        try:
+            network = ipaddress.ip_network(subnet, strict=False)
+        except ValueError as exc:
+            raise ValueError(f"invalid subnet CIDR {subnet!r}: {exc}") from exc
+        parts.append(
+            expr(
+                "ips",
+                EXPR_BETWEEN,
+                [str(network.network_address), str(network.broadcast_address)],
+            )
+        )
     if not parts:
         return None
     if len(parts) == 1:
@@ -362,7 +377,9 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "  • category: one of 'controller', 'network', 'iot'\n"
             f"  • criticality_at_least: one of {CRITICALITY_VALUES}\n"
             "  • vendor: equal-match on the vendor name\n"
-            "  • name_contains: substring match on the asset name"
+            "  • name_contains: substring match on the asset name\n"
+            "  • subnet: CIDR whose inclusive address range is matched "
+            "natively against asset IPs (for example '10.253.10.128/25')"
         ),
     )
     async def query_assets(
@@ -376,6 +393,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         category: str | None = None,
         criticality_at_least: str | None = None,
         hidden: bool | None = None,
+        subnet: str | None = None,
         limit: int = 50,
         after: str | None = None,
         after_by_site: dict[str, str] | None = None,
@@ -406,6 +424,9 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 Returns assets at or above this criticality.
             hidden: True returns only hidden assets; False only
                 visible assets; None (default) returns both.
+            subnet: IPv4 or IPv6 CIDR matched natively against asset IPs.
+                This is exact subnet membership, unlike the free-text
+                `search` parameter.
             limit: Maximum results per page (default 50, max 500).
             after: Opaque page cursor. Omit for the first page; to
                 continue, pass the `end_cursor` value from the previous
@@ -422,6 +443,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             category=category,
             criticality_at_least=criticality_at_least,
             hidden=hidden,
+            subnet=subnet,
         )
         variables: dict[str, Any] = {"pageSize": page_size}
         if filt is not None:

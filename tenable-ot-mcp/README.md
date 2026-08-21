@@ -266,9 +266,11 @@ access at setup time. Full per-tool reference in
 Headlines:
 
 - **Asset domain** — `query_assets`, `get_asset`, `get_asset_vulnerabilities`,
-  `list_custom_fields`
+  `list_custom_fields`; asset queries support exact CIDR filtering through
+  `subnet` in addition to free-text search
 - **Vulnerability domain** — `query_vulnerabilities`, `get_vulnerability`
-- **Event domain** — `query_events`, `get_event`
+- **Event domain** — `query_events`, `get_event`; event queries accept an
+  explicit `asset_id` for asset-scoped event history
 - **Detection policies** — `list_detection_policies`, `query_policy_findings`
 - **Network topology** — `list_segments_and_zones`, `get_communication_paths`
 - **Sensor health** — `list_sensors`

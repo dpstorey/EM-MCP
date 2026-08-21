@@ -72,6 +72,18 @@ _QUERY_EVENTS = (
     "}"
 )
 
+_QUERY_ASSET_EVENTS = (
+    "query Q($id: ID!, $pageSize: Int!, $after: String, "
+    "$filter: EventsExpressionsParams, $sort: [EventsSortParams!]) { "
+    "asset(id: $id) { "
+    "events(first: $pageSize, after: $after, filter: $filter, sort: $sort) { "
+    "pageInfo { hasNextPage endCursor } totalCount "
+    "nodes { " + _EVENT_FIELDS + " } "
+    "} "
+    "} "
+    "}"
+)
+
 
 _GET_EVENT = "query Q($id: ID!) { event(id: $id) { " + _EVENT_FIELDS + " } }"
 
@@ -144,7 +156,9 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "Returns OT detection events matching the filter criteria, "
             "newest first. Use this to investigate alert windows, "
             "policy-firing patterns, source/dest IP context, or events "
-            "in a specific time window. Each event includes the time, "
+            "in a specific time window. Pass `asset_id` to retrieve events "
+            "associated with one asset; do not put an asset UUID in the "
+            "free-text `search` parameter. Each event includes the time, "
             "classification, severity, source/dest assets, the firing "
             "detection policy, and protocol/IP/MAC context. Call "
             "`get_event` on a returned id for full event detail.\n\n"
@@ -176,6 +190,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         resolved: bool | None = None,
         src_ip: str | None = None,
         dst_ip: str | None = None,
+        asset_id: str | None = None,
         search: str | None = None,
         limit: int = 100,
         after: str | None = None,
@@ -197,6 +212,9 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 unresolved; None (default) returns both.
             src_ip / dst_ip: Equal-match on the event's source / destination
                 IP address.
+            asset_id: Return events associated with this asset UUID by using
+                the asset's event connection. Do not pass an asset UUID to
+                `search`.
             search: Single-term, case-insensitive substring across event
                 text fields.
             limit: Maximum results per page (default 100, max 500).
@@ -206,6 +224,10 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 retrieve every matching event.
         """
         page_size = clamp_page_size(limit, default=100)
+        if asset_id is not None and not asset_id.strip():
+            raise ValueError("asset_id cannot be empty")
+        if asset_id and search:
+            raise ValueError("asset_id cannot be combined with free-text search")
         filt = _build_event_filter(
             severity_at_least=severity_at_least,
             event_type=event_type,
@@ -238,12 +260,21 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             cursor = after if len(site_ids) == 1 else (after_by_site or {}).get(machine_id)
             if cursor:
                 site_variables["after"] = cursor
+            query = _QUERY_EVENTS
+            if asset_id:
+                query = _QUERY_ASSET_EVENTS
+                site_variables["id"] = asset_id
+                site_variables.pop("search", None)
             data = await client.query(
-                _QUERY_EVENTS,
+                query,
                 variables=site_variables,
                 icp_machine_id=machine_id,
             )
-            block = data.get("events") or {}
+            asset = data.get("asset") if asset_id else None
+            if asset_id:
+                block = (asset or {}).get("events") or {}
+            else:
+                block = data.get("events") or {}
             nodes = block.get("nodes") or []
             page_info = block.get("pageInfo") or {}
             events = []
@@ -255,7 +286,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                     "event_id": event.get("id"),
                 }
                 events.append(event)
-            return {
+            result: dict[str, Any] = {
                 "site_uuid": machine_id,
                 "count": len(nodes),
                 "total_count": block.get("totalCount"),
@@ -263,6 +294,12 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 "end_cursor": page_info.get("endCursor"),
                 "events": events,
             }
+            if asset_id:
+                result["asset_ref"] = {"site_uuid": machine_id, "asset_id": asset_id}
+                result["asset_found"] = asset is not None
+                if asset is None:
+                    result["error"] = f"No asset with id {asset_id!r}."
+            return result
 
         if len(site_ids) == 1:
             return await query_site(site_ids[0])

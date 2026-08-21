@@ -35,7 +35,7 @@ recorded in `/data/audit.jsonl`.
 
 | Tool | One-line purpose |
 |---|---|
-| `query_assets` | Filter the asset inventory by natural OT vocabulary (`kind` like 'plc' / 'rtu' / 'switch', `category`, `criticality`, `purdue_level`, `vendor`, `name_contains`, `search`, `hidden`); returns identity, classification, IPs, segment membership, risk metrics, and custom-field values keyed by their operator-configured label. |
+| `query_assets` | Filter the asset inventory by natural OT vocabulary (`kind` like 'plc' / 'rtu' / 'switch', `category`, `criticality`, `purdue_level`, `vendor`, `name_contains`, exact CIDR `subnet`, `search`, `hidden`); returns identity, classification, IPs, segment membership, risk metrics, and custom-field values keyed by their operator-configured label. |
 | `get_asset` | Full bundle for one asset by id: identity, classification, network interfaces, segments, custom fields (keyed by label), risk. |
 | `get_asset_vulnerabilities` | Open vulnerabilities affecting one asset, with CVE list, CVSSv3, exploit availability, KEV / exploited-by-malware flags, age, vendor solution. |
 | `list_custom_fields` | Return the asset custom-field schema: which of the 10 slots are configured, their operator-defined labels, and value type ('PlainText' / 'HyperLink'). Call before reading or writing custom fields to learn the tenant's vocabulary. |
@@ -51,7 +51,7 @@ recorded in `/data/audit.jsonl`.
 
 | Tool | One-line purpose |
 |---|---|
-| `query_events` | Filter detection events by `severity_at_least` / `event_type` / `policy_id` / `since` / `until` / `resolved` / `src_ip` / `dst_ip`, newest first. |
+| `query_events` | Filter detection events by `asset_id` / `severity_at_least` / `event_type` / `policy_id` / `since` / `until` / `resolved` / `src_ip` / `dst_ip`, newest first. `asset_id` traverses the asset's event connection; it is not a free-text search. |
 | `get_event` | Full detail for one event by id. |
 
 ### Detection-policy domain
