@@ -55,6 +55,7 @@ from ._enums import (
     to_purdue_setter,
     to_value_type,
 )
+from ._sites import current_write_site_machine_id
 from .assets import _CUSTOM_FIELD_SLOTS, CustomFieldLabelCache, _build_asset_filter
 
 # ----------------------------------------------------------------------
@@ -322,6 +323,7 @@ _CLEARABLE_TOP_FIELDS = {
 async def _build_asset_edit_variables(
     client: TenableClient,
     *,
+    icp_machine_id: str | None = None,
     name: str | None,
     kind: str | None,
     location: str | None,
@@ -387,7 +389,9 @@ async def _build_asset_edit_variables(
             cf_input[slot] = ""
     if custom_fields:
         for label, value in custom_fields.items():
-            slot = await CustomFieldLabelCache.resolve_label_to_slot(client, label)
+            slot = await CustomFieldLabelCache.resolve_label_to_slot(
+                client, label, icp_machine_id=icp_machine_id
+            )
             cf_input[slot] = value if value is not None else ""
     if cf_input:
         variables["customFields"] = cf_input
@@ -407,28 +411,36 @@ async def _execute_write(
     mutation: str,
     variables: dict[str, Any],
     dry_run: bool,
+    *,
+    site_uuid: str | None = None,
+    site_name: str | None = None,
 ) -> dict[str, Any]:
+    machine_id = current_write_site_machine_id()
+    if machine_id is None:
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
+    audit_params = {**variables, "_site_uuid": machine_id}
     if dry_run:
         audit.record(
             tool_name=tool_name,
-            params=variables,
+            params=audit_params,
             dry_run=True,
             outcome="preview",
         )
         return {
             "dry_run": True,
             "tool": tool_name,
+            "site_uuid": machine_id,
             "preview_variables": variables,
             "message": (
                 "DRY RUN — no change sent to Tenable OT. Re-call with dry_run=false to apply."
             ),
         }
     try:
-        result = await client.query(mutation, variables=variables)
+        result = await client.query(mutation, variables=variables, icp_machine_id=machine_id)
     except Exception as exc:
         audit.record(
             tool_name=tool_name,
-            params=variables,
+            params=audit_params,
             dry_run=False,
             outcome="error",
             error=str(exc),
@@ -436,11 +448,16 @@ async def _execute_write(
         raise
     audit.record(
         tool_name=tool_name,
-        params=variables,
+        params=audit_params,
         dry_run=False,
         outcome="ok",
     )
-    return {"dry_run": False, "tool": tool_name, "result": result}
+    return {
+        "dry_run": False,
+        "tool": tool_name,
+        "site_uuid": machine_id,
+        "result": result,
+    }
 
 
 # ----------------------------------------------------------------------
@@ -469,7 +486,11 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         ),
     )
     async def hide_asset(
-        asset_id: str, comment: str | None = None, dry_run: bool = True
+        asset_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        comment: str | None = None,
+        dry_run: bool = True,
     ) -> dict[str, Any]:
         if not asset_id:
             raise ValueError("asset_id is required")
@@ -480,6 +501,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_HIDE_ASSET,
             {"id": asset_id, "comment": comment},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     @mcp.tool(
@@ -490,7 +513,12 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             "WRITE. Defaults to dry_run."
         ),
     )
-    async def restore_asset(asset_id: str, dry_run: bool = True) -> dict[str, Any]:
+    async def restore_asset(
+        asset_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
         if not asset_id:
             raise ValueError("asset_id is required")
         return await _execute_write(
@@ -500,6 +528,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_RESTORE_ASSET,
             {"id": asset_id},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     @mcp.tool(
@@ -513,6 +543,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         ),
     )
     async def bulk_hide_assets(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         filter: dict[str, Any] | None = None,
         search: str | None = None,
         comment: str | None = None,
@@ -527,6 +559,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_BULK_HIDE,
             {"filter": filter, "search": search, "comment": comment},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     @mcp.tool(
@@ -537,6 +571,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         ),
     )
     async def bulk_restore_assets(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         filter: dict[str, Any] | None = None,
         search: str | None = None,
         dry_run: bool = True,
@@ -550,6 +586,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_BULK_RESTORE,
             {"filter": filter, "search": search},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     @mcp.tool(
@@ -568,7 +606,10 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         ),
     )
     async def remove_assets_by_address(
-        addresses: list[str], dry_run: bool = True
+        addresses: list[str],
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
     ) -> dict[str, Any]:
         if not addresses:
             raise ValueError("addresses list is required and must be non-empty")
@@ -579,6 +620,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_REMOVE_BY_ADDRESS,
             {"addresses": list(addresses)},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     @mcp.tool(
@@ -590,7 +633,12 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             "score.\n\nWRITE. Defaults to dry_run."
         ),
     )
-    async def recalculate_asset_risk(asset_id: str, dry_run: bool = True) -> dict[str, Any]:
+    async def recalculate_asset_risk(
+        asset_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
         if not asset_id:
             raise ValueError("asset_id is required")
         return await _execute_write(
@@ -600,6 +648,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_RECALC_RISK,
             {"id": asset_id},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     @mcp.tool(
@@ -613,7 +663,10 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         ),
     )
     async def recalculate_all_risk(
-        components: list[str] | None = None, dry_run: bool = True
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        components: list[str] | None = None,
+        dry_run: bool = True,
     ) -> dict[str, Any]:
         return await _execute_write(
             client,
@@ -622,6 +675,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_RECALC_ALL,
             {"components": components},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     # ------------------------------------------------------------------
@@ -655,6 +710,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
     )
     async def update_asset(
         asset_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         name: str | None = None,
         kind: str | None = None,
         location: str | None = None,
@@ -667,8 +724,10 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
     ) -> dict[str, Any]:
         if not asset_id:
             raise ValueError("asset_id is required")
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
         edit_vars = await _build_asset_edit_variables(
             client,
+            icp_machine_id=machine_id,
             name=name,
             kind=kind,
             location=location,
@@ -686,7 +745,14 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             )
         variables = {"id": asset_id, **edit_vars}
         return await _execute_write(
-            client, audit, "update_asset", _M_UPDATE_ASSET, variables, dry_run
+            client,
+            audit,
+            "update_asset",
+            _M_UPDATE_ASSET,
+            variables,
+            dry_run,
+            site_uuid=machine_id,
+            site_name=None,
         )
 
     @mcp.tool(
@@ -709,6 +775,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         ),
     )
     async def bulk_edit_assets(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         kind: str | None = None,
         category: str | None = None,
         criticality_at_least: str | None = None,
@@ -727,6 +795,7 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         clear_fields: list[str] | None = None,
         dry_run: bool = True,
     ) -> dict[str, Any]:
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
         filt = _build_asset_filter(
             kind=kind,
             vendor=vendor,
@@ -743,6 +812,7 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             )
         edit_vars = await _build_asset_edit_variables(
             client,
+            icp_machine_id=machine_id,
             name=name,
             kind=set_kind,
             location=location,
@@ -766,7 +836,14 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         if segment_id:
             variables["segment"] = segment_id
         return await _execute_write(
-            client, audit, "bulk_edit_assets", _M_BULK_EDIT_ASSETS, variables, dry_run
+            client,
+            audit,
+            "bulk_edit_assets",
+            _M_BULK_EDIT_ASSETS,
+            variables,
+            dry_run,
+            site_uuid=machine_id,
+            site_name=None,
         )
 
     @mcp.tool(
@@ -783,11 +860,18 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             "WRITE. Defaults to dry_run."
         ),
     )
-    async def reset_asset_metadata(asset_id: str, dry_run: bool = True) -> dict[str, Any]:
+    async def reset_asset_metadata(
+        asset_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
         if not asset_id:
             raise ValueError("asset_id is required")
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
         edit_vars = await _build_asset_edit_variables(
             client,
+            icp_machine_id=machine_id,
             name=None,
             kind=None,
             location=None,
@@ -807,7 +891,14 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         )
         variables = {"id": asset_id, **edit_vars}
         return await _execute_write(
-            client, audit, "reset_asset_metadata", _M_UPDATE_ASSET, variables, dry_run
+            client,
+            audit,
+            "reset_asset_metadata",
+            _M_UPDATE_ASSET,
+            variables,
+            dry_run,
+            site_uuid=machine_id,
+            site_name=None,
         )
 
     # ------------------------------------------------------------------
@@ -830,6 +921,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
     )
     async def create_custom_field(
         name: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         value_type: str = "PlainText",
         dry_run: bool = True,
     ) -> dict[str, Any]:
@@ -846,6 +939,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_ADD_CUSTOM_FIELD,
             variables,
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
         if not dry_run:
             CustomFieldLabelCache.invalidate()
@@ -864,6 +959,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
     )
     async def rename_custom_field(
         new_name: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         field_id: str | None = None,
         current_name: str | None = None,
         value_type: str = "PlainText",
@@ -875,9 +972,11 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             raise ValueError("provide either field_id or current_name to identify the slot")
         if field_id and current_name:
             raise ValueError("provide only one of field_id or current_name")
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
         resolved_id = field_id or await CustomFieldLabelCache.resolve_label_to_slot(
             client,
             current_name,  # type: ignore[arg-type]
+            icp_machine_id=machine_id,
         )
         variables = {
             "fieldId": resolved_id,
@@ -891,6 +990,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_UPDATE_CUSTOM_FIELD,
             variables,
             dry_run,
+            site_uuid=machine_id,
+            site_name=None,
         )
         if not dry_run:
             CustomFieldLabelCache.invalidate()
@@ -911,6 +1012,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         ),
     )
     async def delete_custom_field(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         field_id: str | None = None,
         current_name: str | None = None,
         confirm_wipes_values: bool = False,
@@ -925,9 +1028,11 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
                 "delete_custom_field is destructive (wipes the value on every "
                 "asset that had it set). Set confirm_wipes_values=True to apply."
             )
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
         resolved_id = field_id or await CustomFieldLabelCache.resolve_label_to_slot(
             client,
             current_name,  # type: ignore[arg-type]
+            icp_machine_id=machine_id,
         )
         variables = {"fieldId": resolved_id}
         result = await _execute_write(
@@ -937,6 +1042,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_DELETE_CUSTOM_FIELD,
             variables,
             dry_run,
+            site_uuid=machine_id,
+            site_name=None,
         )
         if not dry_run:
             CustomFieldLabelCache.invalidate()
@@ -954,7 +1061,12 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             "matching traffic.\n\nWRITE. Defaults to dry_run."
         ),
     )
-    async def enable_detection_policy(policy_id: str, dry_run: bool = True) -> dict[str, Any]:
+    async def enable_detection_policy(
+        policy_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
         if not policy_id:
             raise ValueError("policy_id is required")
         return await _execute_write(
@@ -964,6 +1076,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_ENABLE_POLICY,
             {"id": policy_id},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     @mcp.tool(
@@ -977,7 +1091,12 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             "dry_run."
         ),
     )
-    async def disable_detection_policy(policy_id: str, dry_run: bool = True) -> dict[str, Any]:
+    async def disable_detection_policy(
+        policy_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
         if not policy_id:
             raise ValueError("policy_id is required")
         return await _execute_write(
@@ -987,6 +1106,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_DISABLE_POLICY,
             {"id": policy_id},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     @mcp.tool(
@@ -998,7 +1119,12 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             "Defaults to dry_run."
         ),
     )
-    async def archive_detection_policy(policy_id: str, dry_run: bool = True) -> dict[str, Any]:
+    async def archive_detection_policy(
+        policy_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
         if not policy_id:
             raise ValueError("policy_id is required")
         return await _execute_write(
@@ -1008,6 +1134,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_ARCHIVE_POLICY,
             {"id": policy_id},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     @mcp.tool(
@@ -1015,7 +1143,10 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         description=("Enable many detection policies at once.\n\nWRITE. Defaults to dry_run."),
     )
     async def enable_detection_policies(
-        policy_ids: list[str], dry_run: bool = True
+        policy_ids: list[str],
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
     ) -> dict[str, Any]:
         if not policy_ids:
             raise ValueError("policy_ids list is required and must be non-empty")
@@ -1026,6 +1157,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_ENABLE_POLICIES,
             {"ids": list(policy_ids)},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     @mcp.tool(
@@ -1038,7 +1171,10 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         ),
     )
     async def disable_detection_policies(
-        policy_ids: list[str], dry_run: bool = True
+        policy_ids: list[str],
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
     ) -> dict[str, Any]:
         if not policy_ids:
             raise ValueError("policy_ids list is required and must be non-empty")
@@ -1049,6 +1185,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_DISABLE_POLICIES,
             {"ids": list(policy_ids)},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     @mcp.tool(
@@ -1060,7 +1198,10 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         ),
     )
     async def archive_detection_policies(
-        policy_ids: list[str], dry_run: bool = True
+        policy_ids: list[str],
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
     ) -> dict[str, Any]:
         if not policy_ids:
             raise ValueError("policy_ids list is required and must be non-empty")
@@ -1071,6 +1212,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_ARCHIVE_POLICIES,
             {"ids": list(policy_ids)},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )
 
     # ------------------------------------------------------------------
@@ -1095,6 +1238,8 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
         ),
     )
     async def resolve_findings(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         policy_id: str | None = None,
         severity_at_least: str | None = None,
         status: str | None = None,
@@ -1126,4 +1271,6 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             _M_RESOLVE_FINDINGS,
             {"filter": filt, "search": search, "comment": comment},
             dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
         )

@@ -115,7 +115,8 @@ class TenableClient:
         endpoint = self._endpoint_for(use_em_root=use_em_root, icp_machine_id=icp_machine_id)
         if self._debug_graphql:
             logger.info(
-                "Tenable GraphQL request endpoint=%s use_em_root=%s icp_machine_id=%s op=%s vars_keys=%s",
+                "Tenable GraphQL request endpoint=%s use_em_root=%s "
+                "icp_machine_id=%s op=%s vars_keys=%s",
                 endpoint,
                 use_em_root,
                 icp_machine_id,

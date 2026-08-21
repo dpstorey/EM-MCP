@@ -14,6 +14,13 @@ results. When `has_more` is true, pass the returned `end_cursor` back as
 the `after` argument to fetch the next page, repeating until `has_more`
 is false to walk the entire matched set.
 
+Site-scoped reads accept `site_uuid` or `site_name`. Collection, search,
+summary, and list tools additionally accept `site_uuids` for multi-site
+fan-out. Their response contains one result block per site plus explicit
+per-site errors; paginated searches accept `after_by_site`. Detail tools use
+one site and return qualified references that retain the originating site.
+Writes require exactly one explicit site and never accept `site_uuids`.
+
 Every write tool defaults to `dry_run=True`. The first call returns
 the planned mutation as JSON without sending it to Tenable OT. The
 consuming AI surfaces the plan, awaits user approval, then calls

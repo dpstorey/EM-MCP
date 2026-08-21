@@ -29,6 +29,7 @@ from ..audit import AuditLog
 from ..tenable_client import TenableClient
 from ._enums import EXPR_EQUAL, EXPR_IN, EXPR_LIKE, expr, expr_and
 from ._shared import clamp_page_size, project_vuln, unwrap_nodes
+from ._sites import resolve_read_site_ids, run_multi_site_read
 
 # ----------------------------------------------------------------------
 # GraphQL fragments + queries
@@ -64,8 +65,17 @@ _FIELD_REGISTRY: dict[str, tuple[str | None, str | None]] = {
 
 # Default lean field set for triage (no description/solution ~4KB blobs)
 _LIST_DEFAULT_FIELDS = [
-    "plugin_id", "name", "severity", "vpr_score", "vpr_level", "cvss3_score",
-    "total_affected_assets", "family", "source", "cves", "exploit_available",
+    "plugin_id",
+    "name",
+    "severity",
+    "vpr_score",
+    "vpr_level",
+    "cvss3_score",
+    "total_affected_assets",
+    "family",
+    "source",
+    "cves",
+    "exploit_available",
 ]
 
 
@@ -87,7 +97,7 @@ def _resolve_fields(requested: list[str] | None) -> list[str]:
     # Deduplicate, preserve order, ensure plugin_id is present
     seen = set()
     out = []
-    for f in (["plugin_id"] + requested):
+    for f in ["plugin_id"] + requested:
         if f not in seen:
             seen.add(f)
             out.append(f)
@@ -241,6 +251,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     async def query_vulnerabilities(
         site_uuid: str | None = None,
         site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         cve: str | None = None,
         severity_at_least: str | None = None,
         family: str | None = None,
@@ -248,6 +259,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         search: str | None = None,
         limit: int = 50,
         after: str | None = None,
+        after_by_site: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Filter vulnerabilities and return a projected list.
 
@@ -280,21 +292,49 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             variables["filter"] = filt
         if search:
             variables["search"] = search
-        if after:
-            variables["after"] = after
+        if after and after_by_site:
+            raise ValueError("after cannot be combined with after_by_site")
+        site_ids = await resolve_read_site_ids(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+        )
 
-        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
-        data = await client.query(_QUERY_VULNS, variables=variables, icp_machine_id=machine_id)
-        block = data.get("plugins") or {}
-        nodes = block.get("nodes") or []
-        page_info = block.get("pageInfo") or {}
-        return {
-            "count": len(nodes),
-            "total_count": block.get("totalCount"),
-            "has_more": bool(page_info.get("hasNextPage")),
-            "end_cursor": page_info.get("endCursor"),
-            "vulnerabilities": [project_vuln(n) for n in nodes],
-        }
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            site_variables = dict(variables)
+            cursor = after if len(site_ids) == 1 else (after_by_site or {}).get(machine_id)
+            if cursor:
+                site_variables["after"] = cursor
+            data = await client.query(
+                _QUERY_VULNS,
+                variables=site_variables,
+                icp_machine_id=machine_id,
+            )
+            block = data.get("plugins") or {}
+            nodes = block.get("nodes") or []
+            page_info = block.get("pageInfo") or {}
+            vulnerabilities = []
+            for node in nodes:
+                vulnerability = project_vuln(node)
+                vulnerability["site_uuid"] = machine_id
+                vulnerability["vulnerability_ref"] = {
+                    "site_uuid": machine_id,
+                    "plugin_id": vulnerability.get("plugin_id"),
+                }
+                vulnerabilities.append(vulnerability)
+            return {
+                "site_uuid": machine_id,
+                "count": len(nodes),
+                "total_count": block.get("totalCount"),
+                "has_more": bool(page_info.get("hasNextPage")),
+                "end_cursor": page_info.get("endCursor"),
+                "vulnerabilities": vulnerabilities,
+            }
+
+        if len(site_ids) == 1:
+            return await query_site(site_ids[0])
+        return await run_multi_site_read(site_ids, query_site)
 
     @mcp.tool(
         title="Get one vulnerability",
@@ -307,7 +347,11 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "first and then fetch by the returned plugin_id."
         ),
     )
-    async def get_vulnerability(plugin_id: str) -> dict[str, Any]:
+    async def get_vulnerability(
+        plugin_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+    ) -> dict[str, Any]:
         """Fetch one vulnerability and its affected-asset list.
 
         Args:
@@ -315,7 +359,12 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         """
         if not plugin_id:
             raise ValueError("plugin_id is required")
-        data = await client.query(_GET_VULN, variables={"id": str(plugin_id)})
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
+        data = await client.query(
+            _GET_VULN,
+            variables={"id": str(plugin_id)},
+            icp_machine_id=machine_id,
+        )
         node = data.get("plugin")
         if not node:
             return {
@@ -323,6 +372,11 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 "error": f"No plugin with id {plugin_id!r}.",
             }
         out = project_vuln(node)
+        out["site_uuid"] = machine_id
+        out["vulnerability_ref"] = {
+            "site_uuid": machine_id,
+            "plugin_id": str(plugin_id),
+        }
         out["affected_assets"] = [
             _project_affected_asset(a) for a in unwrap_nodes(node.get("affectedAssets"))
         ]

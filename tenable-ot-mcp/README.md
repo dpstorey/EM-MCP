@@ -153,9 +153,15 @@ writes the encrypted configuration to `/data/config.enc`.
   endpoint before saving. A failure here means the URL, key,
   or TLS setting is wrong — fix and resubmit.
 
-Site routing for `query_*` tools is now selected per call using
-`site_uuid` (machine id) or `site_name`. When `site_name` is provided,
-the server resolves and caches its machine id via EM paired-ICP inventory.
+Site-scoped reads accept `site_uuid` (machine id) or `site_name`. Collection,
+search, and summary reads also accept `site_uuids` for bounded concurrent
+fan-out across multiple sites. Multi-site responses keep results, errors, and
+pagination state separated by site so records never lose their provenance.
+Entity-detail reads remain single-site and return qualified references such as
+`asset_ref`. Every write requires exactly one explicit site; write tools never
+accept a site array or fall back to mutable session state. When `site_name` is
+provided, the server resolves and caches its machine id via EM paired-ICP
+inventory.
 
 4. **Copy the bearer token(s) shown on the success page.** They're
    displayed once and never again. If you lose them, delete

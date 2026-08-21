@@ -7,6 +7,7 @@ hermetically — no network, no real Tenable OT.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import pytest
@@ -23,10 +24,20 @@ class FakeMcp:
 
     def __init__(self) -> None:
         self.tools: dict[str, Any] = {}
+        self.raw_tools: dict[str, Any] = {}
 
     def tool(self, **_kwargs: Any):
         def deco(fn):
-            self.tools[fn.__name__] = fn
+            self.raw_tools[fn.__name__] = fn
+            if "site_uuid" in inspect.signature(fn).parameters:
+
+                async def with_test_site(*args: Any, **kwargs: Any) -> Any:
+                    kwargs.setdefault("site_uuid", "test-site")
+                    return await fn(*args, **kwargs)
+
+                self.tools[fn.__name__] = with_test_site
+            else:
+                self.tools[fn.__name__] = fn
             return fn
 
         return deco
@@ -37,10 +48,31 @@ class FakeClient:
 
     def __init__(self, canned: dict[str, dict[str, Any]] | None = None) -> None:
         self.calls: list[tuple[str, dict[str, Any] | None]] = []
+        self.site_routes: list[str] = []
         self.canned = canned or {}
 
-    async def query(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def resolve_site_machine_id(
+        self,
+        *,
+        site_uuid: str | None,
+        site_name: str | None,
+    ) -> str:
+        if site_uuid:
+            return site_uuid
+        if site_name:
+            return f"resolved-{site_name}"
+        raise ValueError("site_uuid or site_name is required")
+
+    async def query(
+        self,
+        query: str,
+        variables: dict[str, Any] | None = None,
+        *,
+        icp_machine_id: str | None = None,
+    ) -> dict[str, Any]:
         self.calls.append((query, variables))
+        if icp_machine_id:
+            self.site_routes.append(icp_machine_id)
         for substr, response in self.canned.items():
             if substr in query:
                 return response
@@ -101,6 +133,13 @@ async def test_update_asset_dry_run_returns_preview_without_client_call():
     assert client.calls == []
     # Audit log records the preview.
     assert audit.records[0]["outcome"] == "preview"
+    assert out["site_uuid"] == "test-site"
+
+
+async def test_write_requires_an_explicit_site():
+    mcp, _client, _audit = _make_tools()
+    with pytest.raises(ValueError, match="site_uuid or site_name is required"):
+        await mcp.raw_tools["update_asset"](asset_id="A1", description="hello", dry_run=True)
 
 
 async def test_update_asset_with_name_sends_correct_variables():
@@ -111,6 +150,7 @@ async def test_update_asset_with_name_sends_correct_variables():
     _query, variables = client.calls[0]
     assert variables["id"] == "A1"
     assert variables["name"] == "renamed-plc"
+    assert client.site_routes == ["test-site"]
 
 
 async def test_update_asset_clear_fields_uses_sentinels_and_empty_strings():
@@ -335,7 +375,13 @@ async def test_audit_records_ok_outcome_on_apply():
 
 async def test_audit_records_error_when_client_raises():
     class ErrorClient(FakeClient):
-        async def query(self, query: str, variables=None):
+        async def query(
+            self,
+            query: str,
+            variables=None,
+            *,
+            icp_machine_id: str | None = None,
+        ):
             raise RuntimeError("boom")
 
     mcp = FakeMcp()

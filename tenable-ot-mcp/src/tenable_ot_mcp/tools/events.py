@@ -23,6 +23,7 @@ from ._enums import (
     to_policy_level,
 )
 from ._shared import clamp_page_size, project_event
+from ._sites import resolve_read_site_ids, run_multi_site_read
 
 # ----------------------------------------------------------------------
 # GraphQL fragments + queries
@@ -166,6 +167,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     async def query_events(
         site_uuid: str | None = None,
         site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         severity_at_least: str | None = None,
         event_type: str | None = None,
         policy_id: str | None = None,
@@ -177,6 +179,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         search: str | None = None,
         limit: int = 100,
         after: str | None = None,
+        after_by_site: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Filter OT events and return a time-sorted list.
 
@@ -221,21 +224,49 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             variables["filter"] = filt
         if search:
             variables["search"] = search
-        if after:
-            variables["after"] = after
+        if after and after_by_site:
+            raise ValueError("after cannot be combined with after_by_site")
+        site_ids = await resolve_read_site_ids(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+        )
 
-        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
-        data = await client.query(_QUERY_EVENTS, variables=variables, icp_machine_id=machine_id)
-        block = data.get("events") or {}
-        nodes = block.get("nodes") or []
-        page_info = block.get("pageInfo") or {}
-        return {
-            "count": len(nodes),
-            "total_count": block.get("totalCount"),
-            "has_more": bool(page_info.get("hasNextPage")),
-            "end_cursor": page_info.get("endCursor"),
-            "events": [project_event(n) for n in nodes],
-        }
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            site_variables = dict(variables)
+            cursor = after if len(site_ids) == 1 else (after_by_site or {}).get(machine_id)
+            if cursor:
+                site_variables["after"] = cursor
+            data = await client.query(
+                _QUERY_EVENTS,
+                variables=site_variables,
+                icp_machine_id=machine_id,
+            )
+            block = data.get("events") or {}
+            nodes = block.get("nodes") or []
+            page_info = block.get("pageInfo") or {}
+            events = []
+            for node in nodes:
+                event = project_event(node)
+                event["site_uuid"] = machine_id
+                event["event_ref"] = {
+                    "site_uuid": machine_id,
+                    "event_id": event.get("id"),
+                }
+                events.append(event)
+            return {
+                "site_uuid": machine_id,
+                "count": len(nodes),
+                "total_count": block.get("totalCount"),
+                "has_more": bool(page_info.get("hasNextPage")),
+                "end_cursor": page_info.get("endCursor"),
+                "events": events,
+            }
+
+        if len(site_ids) == 1:
+            return await query_site(site_ids[0])
+        return await run_multi_site_read(site_ids, query_site)
 
     @mcp.tool(
         title="Get one OT event",
@@ -245,7 +276,11 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "or case references a specific event."
         ),
     )
-    async def get_event(event_id: str) -> dict[str, Any]:
+    async def get_event(
+        event_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+    ) -> dict[str, Any]:
         """Fetch one event's full detail.
 
         Args:
@@ -253,8 +288,16 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         """
         if not event_id:
             raise ValueError("event_id is required")
-        data = await client.query(_GET_EVENT, variables={"id": event_id})
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
+        data = await client.query(
+            _GET_EVENT,
+            variables={"id": event_id},
+            icp_machine_id=machine_id,
+        )
         node = data.get("event")
         if not node:
             return {"event": None, "error": f"No event with id {event_id!r}."}
-        return {"event": project_event(node)}
+        event = project_event(node)
+        event["site_uuid"] = machine_id
+        event["event_ref"] = {"site_uuid": machine_id, "event_id": event_id}
+        return {"event": event}

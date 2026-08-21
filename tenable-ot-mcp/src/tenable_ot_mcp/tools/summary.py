@@ -18,6 +18,7 @@ from typing import Any
 
 from ..audit import AuditLog
 from ..tenable_client import TenableClient
+from ._sites import run_site_read
 
 # One large multi-aliased query — Tenable's GraphQL accepts arbitrarily
 # many connection sub-queries in one POST. Each alias hits the same
@@ -83,39 +84,54 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "critical. Event subtotals split by resolved flag."
         ),
     )
-    async def summarize_environment() -> dict[str, Any]:
+    async def summarize_environment(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Return aggregate counts across the deployment."""
-        d = await client.query(_QUERY_SUMMARY)
-        return {
-            "assets": {
-                "total": _count(d.get("assetsTotal")),
-                "hidden": _count(d.get("assetsHidden")),
-                "by_criticality": {
-                    "none": _count(d.get("assetsNoCrit")),
-                    "low": _count(d.get("assetsLowCrit")),
-                    "medium": _count(d.get("assetsMediumCrit")),
-                    "high": _count(d.get("assetsHighCrit")),
+
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            d = await client.query(_QUERY_SUMMARY, icp_machine_id=machine_id)
+            return {
+                "site_uuid": machine_id,
+                "assets": {
+                    "total": _count(d.get("assetsTotal")),
+                    "hidden": _count(d.get("assetsHidden")),
+                    "by_criticality": {
+                        "none": _count(d.get("assetsNoCrit")),
+                        "low": _count(d.get("assetsLowCrit")),
+                        "medium": _count(d.get("assetsMediumCrit")),
+                        "high": _count(d.get("assetsHighCrit")),
+                    },
                 },
-            },
-            "events": {
-                "total": _count(d.get("eventsTotal")),
-                "unresolved": _count(d.get("eventsUnresolved")),
-                "resolved": _count(d.get("eventsResolved")),
-            },
-            "vulnerabilities": {
-                "total": _count(d.get("pluginsTotal")),
-                "by_severity": {
-                    "info": _count(d.get("pluginsInfo")),
-                    "low": _count(d.get("pluginsLow")),
-                    "medium": _count(d.get("pluginsMedium")),
-                    "high": _count(d.get("pluginsHigh")),
-                    "critical": _count(d.get("pluginsCritical")),
+                "events": {
+                    "total": _count(d.get("eventsTotal")),
+                    "unresolved": _count(d.get("eventsUnresolved")),
+                    "resolved": _count(d.get("eventsResolved")),
                 },
-            },
-            "sensors": {"total": _count(d.get("sensorsTotal"))},
-            "topology": {
-                "segments": _count(d.get("segmentGroupsTotal")),
-                "zones": _count(d.get("zonesTotal")),
-            },
-            "policies": {"total": _count(d.get("policiesTotal"))},
-        }
+                "vulnerabilities": {
+                    "total": _count(d.get("pluginsTotal")),
+                    "by_severity": {
+                        "info": _count(d.get("pluginsInfo")),
+                        "low": _count(d.get("pluginsLow")),
+                        "medium": _count(d.get("pluginsMedium")),
+                        "high": _count(d.get("pluginsHigh")),
+                        "critical": _count(d.get("pluginsCritical")),
+                    },
+                },
+                "sensors": {"total": _count(d.get("sensorsTotal"))},
+                "topology": {
+                    "segments": _count(d.get("segmentGroupsTotal")),
+                    "zones": _count(d.get("zonesTotal")),
+                },
+                "policies": {"total": _count(d.get("policiesTotal"))},
+            }
+
+        return await run_site_read(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            worker=query_site,
+        )

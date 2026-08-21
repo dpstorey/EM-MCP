@@ -43,6 +43,7 @@ from typing import Any
 from ..audit import AuditLog
 from ..tenable_client import TenableClient
 from ._shared import clamp_page_size, unwrap_nodes
+from ._sites import SiteScopedWriteMCP, run_site_read
 
 # ===========================================================================
 # Asset groups
@@ -1233,6 +1234,67 @@ def _ew():
     return _execute_write
 
 
+async def _list_group_connection(
+    client: TenableClient,
+    *,
+    query: str,
+    connection_key: str,
+    projector: Any,
+    variables: dict[str, Any],
+    site_uuid: str | None,
+    site_name: str | None,
+    site_uuids: list[str] | None,
+) -> dict[str, Any]:
+    async def query_site(machine_id: str) -> dict[str, Any]:
+        data = await client.query(query, variables=variables, icp_machine_id=machine_id)
+        connection = data.get(connection_key) or {}
+        nodes = unwrap_nodes(connection)
+        groups = [projector(node) for node in nodes]
+        for group in groups:
+            group["site_uuid"] = machine_id
+            group["group_ref"] = {
+                "site_uuid": machine_id,
+                "group_id": group.get("id"),
+            }
+        return {
+            "site_uuid": machine_id,
+            "total": connection.get("totalCount"),
+            "count": len(nodes),
+            "page_info": connection.get("pageInfo"),
+            "groups": groups,
+        }
+
+    return await run_site_read(
+        client,
+        site_uuid=site_uuid,
+        site_name=site_name,
+        site_uuids=site_uuids,
+        worker=query_site,
+    )
+
+
+async def _get_group_for_site(
+    client: TenableClient,
+    *,
+    query: str,
+    result_key: str,
+    projector: Any,
+    group_id: str,
+    site_uuid: str | None,
+    site_name: str | None,
+) -> dict[str, Any]:
+    machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
+    data = await client.query(
+        query,
+        variables={"id": group_id},
+        icp_machine_id=machine_id,
+    )
+    group = projector(data.get(result_key) or {})
+    group["site_uuid"] = machine_id
+    group["group_ref"] = {"site_uuid": machine_id, "group_id": group_id}
+    return group
+
+
 # ===========================================================================
 # Registration — read tools
 # ===========================================================================
@@ -1252,21 +1314,22 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_asset_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_ASSET_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_ASSET_GROUPS,
+            connection_key="assetGroups",
+            projector=_project_asset_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("assetGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_asset_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="List archived asset groups",
@@ -1278,21 +1341,22 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_archived_asset_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_ARCHIVED_ASSET_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_ARCHIVED_ASSET_GROUPS,
+            connection_key="archivedAssetGroups",
+            projector=_project_asset_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("archivedAssetGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_asset_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="Get an asset group by id",
@@ -1304,11 +1368,20 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "and so on."
         ),
     )
-    async def get_asset_group(group_id: str) -> dict[str, Any]:
+    async def get_asset_group(
+        group_id: str, site_uuid: str | None = None, site_name: str | None = None
+    ) -> dict[str, Any]:
         if not group_id:
             raise ValueError("group_id is required")
-        data = await client.query(_Q_ASSET_GROUP, variables={"id": group_id})
-        return _project_asset_group(data.get("assetGroup") or {})
+        return await _get_group_for_site(
+            client,
+            query=_Q_ASSET_GROUP,
+            result_key="assetGroup",
+            projector=_project_asset_group,
+            group_id=group_id,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
 
     # ------------------------------------------------------------------
     # Email groups — recipient lists for policy-action notifications
@@ -1325,21 +1398,22 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_email_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_EMAIL_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_EMAIL_GROUPS,
+            connection_key="emailGroups",
+            projector=_project_email_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("emailGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_email_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="Get an email group by id",
@@ -1347,11 +1421,20 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "Fetch one email group with its recipient list and bound SMTP server details."
         ),
     )
-    async def get_email_group(group_id: str) -> dict[str, Any]:
+    async def get_email_group(
+        group_id: str, site_uuid: str | None = None, site_name: str | None = None
+    ) -> dict[str, Any]:
         if not group_id:
             raise ValueError("group_id is required")
-        data = await client.query(_Q_EMAIL_GROUP, variables={"id": group_id})
-        return _project_email_group(data.get("emailGroup") or {})
+        return await _get_group_for_site(
+            client,
+            query=_Q_EMAIL_GROUP,
+            result_key="emailGroup",
+            projector=_project_email_group,
+            group_id=group_id,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
 
     @mcp.tool(
         title="Find email groups that route through a given SMTP server",
@@ -1364,27 +1447,28 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     )
     async def find_email_groups_using_smtp_server(
         smtp_server_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
         if not smtp_server_id:
             raise ValueError("smtp_server_id is required")
-        data = await client.query(
-            _Q_USED_IN_EMAIL_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_USED_IN_EMAIL_GROUPS,
+            connection_key="usedInEmailGroups",
+            projector=_project_email_group,
             variables={
                 "id": smtp_server_id,
                 "first": clamp_page_size(limit),
                 "after": after_cursor,
             },
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("usedInEmailGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_email_group(n) for n in nodes],
-        }
 
     # ------------------------------------------------------------------
     # Schedule groups — maintenance windows / business hours
@@ -1401,42 +1485,44 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_schedule_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_SCHEDULE_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_SCHEDULE_GROUPS,
+            connection_key="scheduleGroups",
+            projector=_project_schedule_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("scheduleGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_schedule_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="List archived schedule groups",
         description="Soft-deleted schedule groups, paginated.",
     )
     async def list_archived_schedule_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_ARCHIVED_SCHEDULE_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_ARCHIVED_SCHEDULE_GROUPS,
+            connection_key="archivedScheduleGroups",
+            projector=_project_schedule_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("archivedScheduleGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_schedule_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="Get a schedule group by id",
@@ -1447,11 +1533,20 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "`schedules`."
         ),
     )
-    async def get_schedule_group(group_id: str) -> dict[str, Any]:
+    async def get_schedule_group(
+        group_id: str, site_uuid: str | None = None, site_name: str | None = None
+    ) -> dict[str, Any]:
         if not group_id:
             raise ValueError("group_id is required")
-        data = await client.query(_Q_SCHEDULE_GROUP, variables={"id": group_id})
-        return _project_schedule_group(data.get("scheduleGroup") or {})
+        return await _get_group_for_site(
+            client,
+            query=_Q_SCHEDULE_GROUP,
+            result_key="scheduleGroup",
+            projector=_project_schedule_group,
+            group_id=group_id,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
 
     # ------------------------------------------------------------------
     # Tag groups — PLC controller-tag rollups
@@ -1468,31 +1563,41 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_tag_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_TAG_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_TAG_GROUPS,
+            connection_key="tagGroups",
+            projector=_project_tag_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("tagGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_tag_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="Get a tag group by id",
         description="One tag group with up to 100 member items.",
     )
-    async def get_tag_group(group_id: str) -> dict[str, Any]:
+    async def get_tag_group(
+        group_id: str, site_uuid: str | None = None, site_name: str | None = None
+    ) -> dict[str, Any]:
         if not group_id:
             raise ValueError("group_id is required")
-        data = await client.query(_Q_TAG_GROUP, variables={"id": group_id})
-        return _project_tag_group(data.get("tagGroup") or {})
+        return await _get_group_for_site(
+            client,
+            query=_Q_TAG_GROUP,
+            result_key="tagGroup",
+            projector=_project_tag_group,
+            group_id=group_id,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
 
     @mcp.tool(
         title="Discover tags eligible for a tag group",
@@ -1506,6 +1611,9 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_eligible_tags(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         asset_id: str | None = None,
         tag_type: str | None = None,
         limit: int = 100,
@@ -1513,42 +1621,57 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     ) -> dict[str, Any]:
         if tag_type is not None and tag_type not in _TAG_TYPE_VALUES:
             raise ValueError(f"tag_type must be one of {_TAG_TYPE_VALUES}; got {tag_type!r}")
-        data = await client.query(
-            _Q_TAGS_FOR_TAG_GROUP,
-            variables={
-                "asset": asset_id,
-                "type": tag_type,
-                "first": clamp_page_size(limit, default=100, maximum=500),
-                "after": after_cursor,
-            },
-        )
-        conn = data.get("tagsForTagGroup") or {}
-        nodes = unwrap_nodes(conn)
-        out = []
-        for n in nodes:
-            asset = n.get("asset") or {}
-            tags_conn = n.get("tags") or {}
-            out.append(
-                {
-                    "asset": {"id": asset.get("id"), "name": asset.get("name")},
-                    "tags_total": tags_conn.get("totalCount"),
-                    "tags": [
-                        {
-                            "id": t.get("id"),
-                            "name": t.get("name"),
-                            "type": t.get("type"),
-                            "address": t.get("address"),
-                        }
-                        for t in unwrap_nodes(tags_conn)
-                    ],
-                }
-            )
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "asset_tags": out,
+        variables = {
+            "asset": asset_id,
+            "type": tag_type,
+            "first": clamp_page_size(limit, default=100, maximum=500),
+            "after": after_cursor,
         }
+
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            data = await client.query(
+                _Q_TAGS_FOR_TAG_GROUP, variables=variables, icp_machine_id=machine_id
+            )
+            conn = data.get("tagsForTagGroup") or {}
+            nodes = unwrap_nodes(conn)
+            out = []
+            for node in nodes:
+                asset = node.get("asset") or {}
+                tags_conn = node.get("tags") or {}
+                out.append(
+                    {
+                        "asset": {
+                            "id": asset.get("id"),
+                            "name": asset.get("name"),
+                            "site_uuid": machine_id,
+                        },
+                        "tags_total": tags_conn.get("totalCount"),
+                        "tags": [
+                            {
+                                "id": t.get("id"),
+                                "name": t.get("name"),
+                                "type": t.get("type"),
+                                "address": t.get("address"),
+                            }
+                            for t in unwrap_nodes(tags_conn)
+                        ],
+                    }
+                )
+            return {
+                "site_uuid": machine_id,
+                "total": conn.get("totalCount"),
+                "count": len(nodes),
+                "page_info": conn.get("pageInfo"),
+                "asset_tags": out,
+            }
+
+        return await run_site_read(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            worker=query_site,
+        )
 
     # ------------------------------------------------------------------
     # Rule groups — IDS rule bundles
@@ -1563,52 +1686,63 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_rule_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_RULE_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_RULE_GROUPS,
+            connection_key="ruleGroups",
+            projector=_project_rule_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("ruleGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_rule_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="List archived rule groups",
         description="Soft-deleted rule groups, paginated.",
     )
     async def list_archived_rule_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_ARCHIVED_RULE_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_ARCHIVED_RULE_GROUPS,
+            connection_key="archivedRuleGroups",
+            projector=_project_rule_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("archivedRuleGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_rule_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="Get a rule group by id",
         description="One rule group with the first 25 included rules.",
     )
-    async def get_rule_group(group_id: str) -> dict[str, Any]:
+    async def get_rule_group(
+        group_id: str, site_uuid: str | None = None, site_name: str | None = None
+    ) -> dict[str, Any]:
         if not group_id:
             raise ValueError("group_id is required")
-        data = await client.query(_Q_RULE_GROUP, variables={"id": group_id})
-        return _project_rule_group(data.get("ruleGroup") or {})
+        return await _get_group_for_site(
+            client,
+            query=_Q_RULE_GROUP,
+            result_key="ruleGroup",
+            projector=_project_rule_group,
+            group_id=group_id,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
 
     # ------------------------------------------------------------------
     # Port groups
@@ -1623,52 +1757,63 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_port_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_PORT_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_PORT_GROUPS,
+            connection_key="portGroups",
+            projector=_project_port_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("portGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_port_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="List archived port groups",
         description="Soft-deleted port groups, paginated.",
     )
     async def list_archived_port_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_ARCHIVED_PORT_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_ARCHIVED_PORT_GROUPS,
+            connection_key="archivedPortGroups",
+            projector=_project_port_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("archivedPortGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_port_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="Get a port group by id",
         description="One port group with up to 100 of its port-range items.",
     )
-    async def get_port_group(group_id: str) -> dict[str, Any]:
+    async def get_port_group(
+        group_id: str, site_uuid: str | None = None, site_name: str | None = None
+    ) -> dict[str, Any]:
         if not group_id:
             raise ValueError("group_id is required")
-        data = await client.query(_Q_PORT_GROUP, variables={"id": group_id})
-        return _project_port_group(data.get("portGroup") or {})
+        return await _get_group_for_site(
+            client,
+            query=_Q_PORT_GROUP,
+            result_key="portGroup",
+            projector=_project_port_group,
+            group_id=group_id,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
 
     # ------------------------------------------------------------------
     # Protocol groups
@@ -1683,52 +1828,63 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_protocol_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_PROTOCOL_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_PROTOCOL_GROUPS,
+            connection_key="protocolGroups",
+            projector=_project_protocol_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("protocolGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_protocol_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="List archived protocol groups",
         description="Soft-deleted protocol groups, paginated.",
     )
     async def list_archived_protocol_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_ARCHIVED_PROTOCOL_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_ARCHIVED_PROTOCOL_GROUPS,
+            connection_key="archivedProtocolGroups",
+            projector=_project_protocol_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("archivedProtocolGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_protocol_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="Get a protocol group by id",
         description="One protocol group with up to 100 of its items.",
     )
-    async def get_protocol_group(group_id: str) -> dict[str, Any]:
+    async def get_protocol_group(
+        group_id: str, site_uuid: str | None = None, site_name: str | None = None
+    ) -> dict[str, Any]:
         if not group_id:
             raise ValueError("group_id is required")
-        data = await client.query(_Q_PROTOCOL_GROUP, variables={"id": group_id})
-        return _project_protocol_group(data.get("protocolGroup") or {})
+        return await _get_group_for_site(
+            client,
+            query=_Q_PROTOCOL_GROUP,
+            result_key="protocolGroup",
+            projector=_project_protocol_group,
+            group_id=group_id,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
 
     # ------------------------------------------------------------------
     # User groups (ICP-level) and EmUserGroup (Enterprise Manager)
@@ -1743,52 +1899,63 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_user_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_USER_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_USER_GROUPS,
+            connection_key="userGroups",
+            projector=_project_user_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("userGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_user_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="List archived user groups (ICP-level)",
         description="Soft-deleted user groups at the ICP level.",
     )
     async def list_archived_user_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_ARCHIVED_USER_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_ARCHIVED_USER_GROUPS,
+            connection_key="archivedUserGroups",
+            projector=_project_user_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("archivedUserGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_user_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="Get a user group by id (ICP-level)",
         description="One ICP-level user group with its roles and member preview.",
     )
-    async def get_user_group(group_id: str) -> dict[str, Any]:
+    async def get_user_group(
+        group_id: str, site_uuid: str | None = None, site_name: str | None = None
+    ) -> dict[str, Any]:
         if not group_id:
             raise ValueError("group_id is required")
-        data = await client.query(_Q_USER_GROUP, variables={"id": group_id})
-        return _project_user_group(data.get("userGroup") or {})
+        return await _get_group_for_site(
+            client,
+            query=_Q_USER_GROUP,
+            result_key="userGroup",
+            projector=_project_user_group,
+            group_id=group_id,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
 
     @mcp.tool(
         title="List user groups (Enterprise Manager level)",
@@ -1799,52 +1966,63 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_em_user_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_EM_USER_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_EM_USER_GROUPS,
+            connection_key="emUserGroups",
+            projector=_project_user_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("emUserGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_user_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="List archived user groups (Enterprise Manager level)",
         description="Soft-deleted EM-level user groups.",
     )
     async def list_em_archived_user_groups(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         limit: int = 50,
         after_cursor: str | None = None,
     ) -> dict[str, Any]:
-        data = await client.query(
-            _Q_EM_ARCHIVED_USER_GROUPS,
+        return await _list_group_connection(
+            client,
+            query=_Q_EM_ARCHIVED_USER_GROUPS,
+            connection_key="emArchivedUserGroups",
+            projector=_project_user_group,
             variables={"first": clamp_page_size(limit), "after": after_cursor},
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
         )
-        conn = data.get("emArchivedUserGroups") or {}
-        nodes = unwrap_nodes(conn)
-        return {
-            "total": conn.get("totalCount"),
-            "count": len(nodes),
-            "page_info": conn.get("pageInfo"),
-            "groups": [_project_user_group(n) for n in nodes],
-        }
 
     @mcp.tool(
         title="Get a user group by id (Enterprise Manager level)",
         description="One EM-level user group with its roles and member preview.",
     )
-    async def get_em_user_group(group_id: str) -> dict[str, Any]:
+    async def get_em_user_group(
+        group_id: str, site_uuid: str | None = None, site_name: str | None = None
+    ) -> dict[str, Any]:
         if not group_id:
             raise ValueError("group_id is required")
-        data = await client.query(_Q_EM_USER_GROUP, variables={"id": group_id})
-        return _project_user_group(data.get("emUserGroup") or {})
+        return await _get_group_for_site(
+            client,
+            query=_Q_EM_USER_GROUP,
+            result_key="emUserGroup",
+            projector=_project_user_group,
+            group_id=group_id,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
 
 
 # ===========================================================================
@@ -1854,6 +2032,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
 
 def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> None:
     """Register every group-surface WRITE tool. Gated by `write_tools_enabled`."""
+    mcp = SiteScopedWriteMCP(mcp, client)
     execute_write = _ew()
 
     # ------------------------------------------------------------------
@@ -2213,7 +2392,7 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
                     "start": s["start"],
                     "end": s["end"],
                 }
-                for s in schedules
+                for s in schedules or []
             ]
             return "RecurringGroup", {"schedules": normalized}
         return "Function", {}

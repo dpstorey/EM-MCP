@@ -25,6 +25,7 @@ from typing import Any
 from ..audit import AuditLog
 from ..tenable_client import TenableClient
 from ._shared import clamp_page_size
+from ._sites import SiteScopedWriteMCP, current_write_site_machine_id, run_site_read
 
 # ----------------------------------------------------------------------
 # GraphQL fragments + queries
@@ -353,23 +354,50 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "a human-only action via the Tenable OT UI."
         ),
     )
-    async def list_active_scans(limit: int = 100) -> dict[str, Any]:
+    async def list_active_scans(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
         """List all active scans (defined scan jobs).
 
         Args:
             limit: Maximum scans to return (default 100, max 500).
         """
         page_size = clamp_page_size(limit, default=100)
-        data = await client.query(_QUERY_ACTIVE_SCANS, variables={"pageSize": page_size})
-        block = data.get("activeQueries") or {}
-        nodes = block.get("nodes") or []
-        page_info = block.get("pageInfo") or {}
-        return {
-            "count": len(nodes),
-            "total_count": block.get("totalCount"),
-            "has_more": bool(page_info.get("hasNextPage")),
-            "scans": [_project_scan(n) for n in nodes],
-        }
+
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            data = await client.query(
+                _QUERY_ACTIVE_SCANS,
+                variables={"pageSize": page_size},
+                icp_machine_id=machine_id,
+            )
+            block = data.get("activeQueries") or {}
+            nodes = block.get("nodes") or []
+            page_info = block.get("pageInfo") or {}
+            scans = [_project_scan(node) for node in nodes]
+            for scan in scans:
+                scan["site_uuid"] = machine_id
+                scan["scan_ref"] = {
+                    "site_uuid": machine_id,
+                    "scan_id": scan.get("id"),
+                }
+            return {
+                "site_uuid": machine_id,
+                "count": len(nodes),
+                "total_count": block.get("totalCount"),
+                "has_more": bool(page_info.get("hasNextPage")),
+                "scans": scans,
+            }
+
+        return await run_site_read(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            worker=query_site,
+        )
 
     @mcp.tool(
         title="Get one active scan",
@@ -380,7 +408,11 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "modifications."
         ),
     )
-    async def get_active_scan(scan_id: str) -> dict[str, Any]:
+    async def get_active_scan(
+        scan_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+    ) -> dict[str, Any]:
         """Fetch one active scan.
 
         Args:
@@ -388,11 +420,19 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         """
         if not scan_id:
             raise ValueError("scan_id is required")
-        data = await client.query(_GET_ACTIVE_SCAN, variables={"id": scan_id})
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
+        data = await client.query(
+            _GET_ACTIVE_SCAN,
+            variables={"id": scan_id},
+            icp_machine_id=machine_id,
+        )
         node = data.get("activeQuery")
         if not node:
             return {"scan": None, "error": f"No active scan with id {scan_id!r}."}
-        return {"scan": _project_scan(node)}
+        scan = _project_scan(node)
+        scan["site_uuid"] = machine_id
+        scan["scan_ref"] = {"site_uuid": machine_id, "scan_id": scan_id}
+        return {"scan": scan}
 
     @mcp.tool(
         title="Get past executions of an active scan",
@@ -408,6 +448,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     )
     async def get_active_scan_executions(
         scan_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         limit: int = 20,
     ) -> dict[str, Any]:
         """List past execution records for one active scan.
@@ -418,16 +460,20 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         """
         if not scan_id:
             raise ValueError("scan_id is required")
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
         page_size = clamp_page_size(limit, default=20)
         data = await client.query(
             _QUERY_SCAN_EXECUTIONS,
             variables={"id": scan_id, "pageSize": page_size},
+            icp_machine_id=machine_id,
         )
         block = data.get("activeQueryExecutions") or {}
         nodes = block.get("nodes") or []
         page_info = block.get("pageInfo") or {}
         return {
             "scan_id": scan_id,
+            "site_uuid": machine_id,
+            "scan_ref": {"site_uuid": machine_id, "scan_id": scan_id},
             "count": len(nodes),
             "total_count": block.get("totalCount"),
             "has_more": bool(page_info.get("hasNextPage")),
@@ -578,6 +624,7 @@ def _build_schedule(
 
 def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> None:
     """Register define-side active-scan write tools."""
+    mcp = SiteScopedWriteMCP(mcp, client)
 
     @mcp.tool(
         title="Define an active scan (NEW — does not run it)",
@@ -1296,27 +1343,32 @@ async def _execute_write(
     variables: dict[str, Any],
     dry_run: bool,
 ) -> dict[str, Any]:
+    machine_id = current_write_site_machine_id()
+    if machine_id is None:
+        raise ValueError("site_uuid or site_name is required")
+    audit_params = {**variables, "_site_uuid": machine_id}
     if dry_run:
         audit.record(
             tool_name=tool_name,
-            params=variables,
+            params=audit_params,
             dry_run=True,
             outcome="preview",
         )
         return {
             "dry_run": True,
             "tool": tool_name,
+            "site_uuid": machine_id,
             "preview_variables": variables,
             "message": (
                 "DRY RUN — no change sent to Tenable OT. Re-call with dry_run=false to apply."
             ),
         }
     try:
-        result = await client.query(mutation, variables=variables)
+        result = await client.query(mutation, variables=variables, icp_machine_id=machine_id)
     except Exception as exc:
         audit.record(
             tool_name=tool_name,
-            params=variables,
+            params=audit_params,
             dry_run=False,
             outcome="error",
             error=str(exc),
@@ -1324,8 +1376,13 @@ async def _execute_write(
         raise
     audit.record(
         tool_name=tool_name,
-        params=variables,
+        params=audit_params,
         dry_run=False,
         outcome="ok",
     )
-    return {"dry_run": False, "tool": tool_name, "result": result}
+    return {
+        "dry_run": False,
+        "tool": tool_name,
+        "site_uuid": machine_id,
+        "result": result,
+    }

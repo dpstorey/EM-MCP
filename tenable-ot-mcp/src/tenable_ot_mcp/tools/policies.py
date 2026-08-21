@@ -24,6 +24,7 @@ from ._enums import (
     to_policy_level,
 )
 from ._shared import clamp_page_size, unwrap_nodes
+from ._sites import run_site_read
 
 # ----------------------------------------------------------------------
 # GraphQL fragments + queries
@@ -204,6 +205,9 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_detection_policies(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         category: str | None = None,
         enabled: bool | None = None,
         paused: bool | None = None,
@@ -225,11 +229,6 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             limit: Maximum policies to return (default 200, max 500).
         """
         page_size = clamp_page_size(limit, default=200)
-        data = await client.query(_QUERY_POLICIES, variables={"pageSize": page_size})
-        block = data.get("policies") or {}
-        nodes = block.get("nodes") or []
-        page_info = block.get("pageInfo") or {}
-        projected = [_project_policy(n) for n in nodes]
 
         # Client-side filter pass.
         def keep(p: dict[str, Any]) -> bool:
@@ -249,14 +248,39 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                     return False
             return True
 
-        filtered = [p for p in projected if keep(p)]
-        return {
-            "count": len(filtered),
-            "total_count_unfiltered": block.get("totalCount"),
-            "page_returned": len(projected),
-            "has_more_in_tenable": bool(page_info.get("hasNextPage")),
-            "policies": filtered,
-        }
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            data = await client.query(
+                _QUERY_POLICIES,
+                variables={"pageSize": page_size},
+                icp_machine_id=machine_id,
+            )
+            block = data.get("policies") or {}
+            nodes = block.get("nodes") or []
+            page_info = block.get("pageInfo") or {}
+            projected = [_project_policy(node) for node in nodes]
+            filtered = [policy for policy in projected if keep(policy)]
+            for policy in filtered:
+                policy["site_uuid"] = machine_id
+                policy["policy_ref"] = {
+                    "site_uuid": machine_id,
+                    "policy_id": policy.get("id"),
+                }
+            return {
+                "site_uuid": machine_id,
+                "count": len(filtered),
+                "total_count_unfiltered": block.get("totalCount"),
+                "page_returned": len(projected),
+                "has_more_in_tenable": bool(page_info.get("hasNextPage")),
+                "policies": filtered,
+            }
+
+        return await run_site_read(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            worker=query_site,
+        )
 
     @mcp.tool(
         title="Query policy findings",
@@ -279,6 +303,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     async def query_policy_findings(
         site_uuid: str | None = None,
         site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         policy_id: str | None = None,
         severity_at_least: str | None = None,
         status: str | None = None,
@@ -332,18 +357,30 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         if search:
             variables["search"] = search
 
-        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
-        data = await client.query(
-            _QUERY_POLICY_FINDINGS,
-            variables=variables,
-            icp_machine_id=machine_id,
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            data = await client.query(
+                _QUERY_POLICY_FINDINGS,
+                variables=variables,
+                icp_machine_id=machine_id,
+            )
+            block = data.get("policyFindings") or {}
+            nodes = block.get("nodes") or []
+            page_info = block.get("pageInfo") or {}
+            findings = [_project_finding(node) for node in nodes]
+            for finding in findings:
+                finding["site_uuid"] = machine_id
+            return {
+                "site_uuid": machine_id,
+                "count": len(nodes),
+                "total_count": block.get("totalCount"),
+                "has_more": bool(page_info.get("hasNextPage")),
+                "findings": findings,
+            }
+
+        return await run_site_read(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            worker=query_site,
         )
-        block = data.get("policyFindings") or {}
-        nodes = block.get("nodes") or []
-        page_info = block.get("pageInfo") or {}
-        return {
-            "count": len(nodes),
-            "total_count": block.get("totalCount"),
-            "has_more": bool(page_info.get("hasNextPage")),
-            "findings": [_project_finding(n) for n in nodes],
-        }

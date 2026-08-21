@@ -16,6 +16,7 @@ from typing import Any
 from ..audit import AuditLog
 from ..tenable_client import TenableClient
 from ._shared import unwrap_nodes
+from ._sites import run_site_read
 
 _QUERY_SENSORS = """
 query Q {
@@ -92,6 +93,9 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         ),
     )
     async def list_sensors(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         status: str | None = None,
         connection_status: str | None = None,
     ) -> dict[str, Any]:
@@ -106,9 +110,6 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 `connection_status` field (Tenable's
                 `ConnectionStatus` enum).
         """
-        data = await client.query(_QUERY_SENSORS)
-        nodes = unwrap_nodes(data.get("sensors"))
-        projected = [_project_sensor(n) for n in nodes]
 
         def keep(s: dict[str, Any]) -> bool:
             if status and (s.get("status") or "") != status:
@@ -117,5 +118,24 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 return False
             return True
 
-        filtered = [s for s in projected if keep(s)]
-        return {"count": len(filtered), "total": len(projected), "sensors": filtered}
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            data = await client.query(_QUERY_SENSORS, icp_machine_id=machine_id)
+            nodes = unwrap_nodes(data.get("sensors"))
+            projected = [_project_sensor(node) for node in nodes]
+            filtered = [sensor for sensor in projected if keep(sensor)]
+            for sensor in filtered:
+                sensor["site_uuid"] = machine_id
+            return {
+                "site_uuid": machine_id,
+                "count": len(filtered),
+                "total": len(projected),
+                "sensors": filtered,
+            }
+
+        return await run_site_read(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            worker=query_site,
+        )

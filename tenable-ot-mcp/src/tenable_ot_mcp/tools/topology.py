@@ -18,6 +18,7 @@ from ..audit import AuditLog
 from ..tenable_client import TenableClient
 from ._enums import EXPR_EQUAL, EXPR_GREATER_EQUAL, EXPR_OR, expr, expr_and
 from ._shared import clamp_page_size, unwrap_nodes
+from ._sites import run_site_read
 
 # ----------------------------------------------------------------------
 # GraphQL fragments + queries
@@ -139,16 +140,31 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "Security Perimeters, or NEI 08-09 defense-in-depth."
         ),
     )
-    async def list_segments_and_zones() -> dict[str, Any]:
+    async def list_segments_and_zones(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Return all segments and zones."""
-        seg_data = await client.query(_QUERY_SEGMENTS)
-        zone_data = await client.query(_QUERY_ZONES)
-        segments = unwrap_nodes(seg_data.get("segmentGroups"))
-        zones = unwrap_nodes(zone_data.get("zones"))
-        return {
-            "segments": [_project_segment(s) for s in segments],
-            "zones": [_project_zone(z) for z in zones],
-        }
+
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            seg_data = await client.query(_QUERY_SEGMENTS, icp_machine_id=machine_id)
+            zone_data = await client.query(_QUERY_ZONES, icp_machine_id=machine_id)
+            segments = unwrap_nodes(seg_data.get("segmentGroups"))
+            zones = unwrap_nodes(zone_data.get("zones"))
+            return {
+                "site_uuid": machine_id,
+                "segments": [_project_segment(segment) for segment in segments],
+                "zones": [_project_zone(zone) for zone in zones],
+            }
+
+        return await run_site_read(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            worker=query_site,
+        )
 
     @mcp.tool(
         title="Get communication paths for an asset",
@@ -165,6 +181,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     )
     async def get_communication_paths(
         asset_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         since: str | None = None,
         limit: int = 200,
     ) -> dict[str, Any]:
@@ -177,6 +195,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         """
         if not asset_id:
             raise ValueError("asset_id is required")
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
         page_size = clamp_page_size(limit, default=200)
 
         # A link is keyed by `asset1` and `asset2`; either side might be
@@ -198,7 +217,11 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "filter": filt,
             "sort": [{"field": "lastConv", "direction": "DescNullLast"}],
         }
-        data = await client.query(_QUERY_LINKS, variables=variables)
+        data = await client.query(
+            _QUERY_LINKS,
+            variables=variables,
+            icp_machine_id=machine_id,
+        )
         block = data.get("links") or {}
         nodes = block.get("nodes") or []
         page_info = block.get("pageInfo") or {}
@@ -213,6 +236,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 {
                     "link_id": link["id"],
                     "peer_id": peer_id,
+                    "peer_ref": {"site_uuid": machine_id, "asset_id": peer_id},
                     "protocols": link["protocols"],
                     "traffic": link["traffic"],
                     "conversation_count": link["conversation_count"],
@@ -223,6 +247,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
 
         return {
             "asset_id": asset_id,
+            "site_uuid": machine_id,
+            "asset_ref": {"site_uuid": machine_id, "asset_id": asset_id},
             "count": len(peers),
             "total_count": block.get("totalCount"),
             "has_more": bool(page_info.get("hasNextPage")),

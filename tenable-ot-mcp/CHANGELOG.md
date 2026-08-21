@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Multi-site read fan-out** — collection, search, list, and summary tools
+  accept `site_uuids` and query the selected ICPs with bounded concurrency.
+  Responses retain per-site provenance, pagination state, and partial errors.
+- **Qualified entity references** — asset, vulnerability, event, policy, scan,
+  group, and topology results retain their originating site for safe follow-up
+  detail calls.
+
+### Changed
+- **Explicit single-site writes** — every write tool now exposes exactly one
+  `site_uuid` / `site_name` selector, routes mutations to that ICP, and records
+  the resolved site in audit entries. Site arrays and implicit mutable site
+  context are not supported for writes.
+- Site-scoped detail reads consistently require a singular site selector;
+  Enterprise Manager root inventory and connection status remain unscoped.
+
 [Unreleased]: https://gitlab.com/jwalley/tenable-ot-mcp/-/compare/v0.4.1...main
 
 ## [0.4.1] - 2026-06-03

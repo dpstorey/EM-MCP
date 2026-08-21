@@ -37,6 +37,7 @@ from ._enums import (
     expr_and,
 )
 from ._shared import clamp_page_size, project_event, project_vuln, unwrap_nodes
+from ._sites import run_site_read
 
 # ----------------------------------------------------------------------
 # GraphQL fragments + queries
@@ -333,7 +334,14 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             _project_neighbor_link(link, entry_asset_id)
             for link in unwrap_nodes(link_data.get("links"))
         ]
+        for peer in peers:
+            peer["peer_ref"] = {
+                "site_uuid": machine_id,
+                "asset_id": peer.get("peer_id"),
+            }
         return {
+            "site_uuid": machine_id,
+            "asset_ref": {"site_uuid": machine_id, "asset_id": entry_asset_id},
             "asset": _project_asset_compact(center),
             "peer_count": len(peers),
             "peers": peers,
@@ -360,6 +368,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     async def query_vulnerability_clusters(
         site_uuid: str | None = None,
         site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         asset_ids: list[str] | None = None,
         cve_substring: str | None = None,
         severity_at_least: str | None = None,
@@ -386,67 +395,84 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 "mode": None,
                 "error": "Provide at least one of asset_ids or cve_substring.",
             }
-        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
 
-        if asset_ids:
-            page_size = clamp_page_size(per_asset_limit, default=100)
-            filt = _build_per_asset_plugin_filter(severity_at_least, cve_substring)
-            variables_template: dict[str, Any] = {"pageSize": page_size}
-            if filt is not None:
-                variables_template["filter"] = filt
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            if asset_ids:
+                page_size = clamp_page_size(per_asset_limit, default=100)
+                filt = _build_per_asset_plugin_filter(severity_at_least, cve_substring)
+                variables_template: dict[str, Any] = {"pageSize": page_size}
+                if filt is not None:
+                    variables_template["filter"] = filt
 
-            async def fetch(aid: str) -> dict[str, Any]:
-                vars_ = dict(variables_template, id=aid)
-                d = await client.query(
-                    _QUERY_PLUGINS_FOR_ASSET,
-                    variables=vars_,
-                    icp_machine_id=machine_id,
-                )
-                a = d.get("asset") or {}
-                block = a.get("plugins") or {}
+                async def fetch(asset_id: str) -> dict[str, Any]:
+                    variables = dict(variables_template, id=asset_id)
+                    data = await client.query(
+                        _QUERY_PLUGINS_FOR_ASSET,
+                        variables=variables,
+                        icp_machine_id=machine_id,
+                    )
+                    asset = data.get("asset") or {}
+                    block = asset.get("plugins") or {}
+                    return {
+                        "site_uuid": machine_id,
+                        "asset_id": asset_id,
+                        "asset_ref": {
+                            "site_uuid": machine_id,
+                            "asset_id": asset_id,
+                        },
+                        "total_count": block.get("totalCount"),
+                        "vulnerabilities": [
+                            project_vuln(plugin) for plugin in (block.get("nodes") or [])
+                        ],
+                    }
+
+                results = await asyncio.gather(*(fetch(asset_id) for asset_id in asset_ids))
                 return {
-                    "asset_id": aid,
-                    "total_count": block.get("totalCount"),
-                    "vulnerabilities": [project_vuln(p) for p in (block.get("nodes") or [])],
+                    "site_uuid": machine_id,
+                    "mode": "per_asset",
+                    "asset_count": len(results),
+                    "by_asset": results,
                 }
 
-            results = await asyncio.gather(*(fetch(aid) for aid in asset_ids))
+            page_size = clamp_page_size(global_limit, default=100)
+            parts: list[dict] = [{"field": "name", "op": "Like", "values": [f"%{cve_substring}%"]}]
+            if severity_at_least:
+                parts.append(expr("severity", EXPR_IN, _severity_at_least(severity_at_least)))
+            global_filt = parts[0] if len(parts) == 1 else expr_and(*parts)
+            data = await client.query(
+                _QUERY_PLUGINS_BY_CVE,
+                variables={"pageSize": page_size, "filter": global_filt},
+                icp_machine_id=machine_id,
+            )
+            vulnerabilities = []
+            for plugin in unwrap_nodes(data.get("plugins")):
+                projected = project_vuln(plugin)
+                projected["site_uuid"] = machine_id
+                projected["affected_assets"] = [
+                    {
+                        "id": asset.get("id"),
+                        "name": asset.get("name"),
+                        "type": asset.get("type"),
+                        "vendor": asset.get("vendor"),
+                        "criticality": asset.get("criticality"),
+                    }
+                    for asset in unwrap_nodes(plugin.get("affectedAssets"))
+                ]
+                vulnerabilities.append(projected)
             return {
-                "mode": "per_asset",
-                "asset_count": len(results),
-                "by_asset": results,
+                "site_uuid": machine_id,
+                "mode": "global_cve",
+                "count": len(vulnerabilities),
+                "vulnerabilities": vulnerabilities,
             }
 
-        # cve_substring-only path: global plugin search.
-        page_size = clamp_page_size(global_limit, default=100)
-        parts: list[dict] = [{"field": "name", "op": "Like", "values": [f"%{cve_substring}%"]}]
-        if severity_at_least:
-            parts.append(expr("severity", EXPR_IN, _severity_at_least(severity_at_least)))
-        global_filt = parts[0] if len(parts) == 1 else expr_and(*parts)
-        data = await client.query(
-            _QUERY_PLUGINS_BY_CVE,
-            variables={"pageSize": page_size, "filter": global_filt},
-            icp_machine_id=machine_id,
+        return await run_site_read(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            worker=query_site,
         )
-        out = []
-        for p in unwrap_nodes(data.get("plugins")):
-            proj = project_vuln(p)
-            proj["affected_assets"] = [
-                {
-                    "id": a.get("id"),
-                    "name": a.get("name"),
-                    "type": a.get("type"),
-                    "vendor": a.get("vendor"),
-                    "criticality": a.get("criticality"),
-                }
-                for a in unwrap_nodes(p.get("affectedAssets"))
-            ]
-            out.append(proj)
-        return {
-            "mode": "global_cve",
-            "count": len(out),
-            "vulnerabilities": out,
-        }
 
     @mcp.tool(
         title="Query temporal patterns (event sequence, not motif analysis)",
@@ -464,6 +490,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         since: str,
         site_uuid: str | None = None,
         site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         until: str | None = None,
         event_types: list[str] | None = None,
         limit: int = 200,
@@ -484,7 +511,6 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         if not since:
             raise ValueError("since is required (ISO-8601 timestamp)")
         page_size = clamp_page_size(limit, default=200)
-        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
         parts: list[dict] = [expr("time", EXPR_GREATER_EQUAL, [since])]
         if until:
             parts.append(expr("time", EXPR_LESS_EQUAL, [until]))
@@ -495,22 +521,34 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 parts.append({"field": "type", "op": "In", "values": list(event_types)})
         filt = parts[0] if len(parts) == 1 else expr_and(*parts)
 
-        data = await client.query(
-            _QUERY_EVENTS,
-            variables={
-                "pageSize": page_size,
-                "filter": filt,
-                "sort": [{"field": "time", "direction": "AscNullLast"}],
-            },
-            icp_machine_id=machine_id,
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            data = await client.query(
+                _QUERY_EVENTS,
+                variables={
+                    "pageSize": page_size,
+                    "filter": filt,
+                    "sort": [{"field": "time", "direction": "AscNullLast"}],
+                },
+                icp_machine_id=machine_id,
+            )
+            block = data.get("events") or {}
+            events = [project_event(event) for event in (block.get("nodes") or [])]
+            for event in events:
+                event["site_uuid"] = machine_id
+            return {
+                "site_uuid": machine_id,
+                "count": len(events),
+                "total_count": block.get("totalCount"),
+                "events": events,
+            }
+
+        return await run_site_read(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            worker=query_site,
         )
-        block = data.get("events") or {}
-        events = [project_event(e) for e in (block.get("nodes") or [])]
-        return {
-            "count": len(events),
-            "total_count": block.get("totalCount"),
-            "events": events,
-        }
 
     @mcp.tool(
         title="Get asset intelligence bundle (joined data, not narrative)",
@@ -525,6 +563,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     )
     async def get_asset_intelligence(
         asset_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         recent_event_window_iso: str | None = None,
         max_peers: int = 50,
         max_vulns: int = 50,
@@ -542,9 +582,14 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         """
         if not asset_id:
             raise ValueError("asset_id is required")
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
 
         # 1. Asset core
-        asset_data = await client.query(_GET_ASSET_CORE, variables={"id": asset_id})
+        asset_data = await client.query(
+            _GET_ASSET_CORE,
+            variables={"id": asset_id},
+            icp_machine_id=machine_id,
+        )
         center = asset_data.get("asset")
         if not center:
             return {"asset": None, "error": f"No asset with id {asset_id!r}."}
@@ -556,6 +601,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 "id": asset_id,
                 "pageSize": clamp_page_size(max_vulns, default=50),
             },
+            icp_machine_id=machine_id,
         )
         vuln_block = (vuln_data.get("asset") or {}).get("plugins") or {}
         vulns = [project_vuln(p) for p in (vuln_block.get("nodes") or [])]
@@ -568,7 +614,11 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         }
         if recent_event_window_iso:
             event_vars["filter"] = expr("time", EXPR_GREATER_EQUAL, [recent_event_window_iso])
-        event_data = await client.query(_QUERY_EVENTS_FOR_ASSET, variables=event_vars)
+        event_data = await client.query(
+            _QUERY_EVENTS_FOR_ASSET,
+            variables=event_vars,
+            icp_machine_id=machine_id,
+        )
         event_block = (event_data.get("asset") or {}).get("events") or {}
         events = [project_event(e) for e in (event_block.get("nodes") or [])]
 
@@ -579,12 +629,15 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 "pageSize": clamp_page_size(max_peers, default=50),
                 "filter": _link_filter_for_asset(asset_id),
             },
+            icp_machine_id=machine_id,
         )
         peers = [
             _project_neighbor_link(link, asset_id) for link in unwrap_nodes(link_data.get("links"))
         ]
 
         return {
+            "site_uuid": machine_id,
+            "asset_ref": {"site_uuid": machine_id, "asset_id": asset_id},
             "asset": _project_asset_compact(center),
             "vulnerabilities": vulns,
             "vulnerability_total": vuln_block.get("totalCount"),

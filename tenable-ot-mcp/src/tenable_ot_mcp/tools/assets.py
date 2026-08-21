@@ -32,6 +32,7 @@ from ._enums import (
     to_criticality_at_least,
 )
 from ._shared import clamp_page_size, project_vuln, unwrap_nodes
+from ._sites import resolve_read_site_ids, run_multi_site_read
 
 # ----------------------------------------------------------------------
 # GraphQL fragments
@@ -134,13 +135,18 @@ class CustomFieldLabelCache:
         cls._ts = 0.0
 
     @classmethod
-    async def resolve_label_to_slot(cls, client: TenableClient, label: str) -> str:
+    async def resolve_label_to_slot(
+        cls,
+        client: TenableClient,
+        label: str,
+        icp_machine_id: str | None = None,
+    ) -> str:
         """Reverse-lookup: find which slot is configured for the given label.
 
         Used by write tools that accept `custom_fields={"<label>": value}`.
         Raises ValueError if the label is not configured.
         """
-        slot_to_label = await cls.get_or_fetch(client)
+        slot_to_label = await cls.get_or_fetch(client, icp_machine_id=icp_machine_id)
         match = next(
             (slot for slot, name in slot_to_label.items() if name == label),
             None,
@@ -316,6 +322,16 @@ def _project_asset(
     }
 
 
+def _qualify_asset(asset: dict[str, Any], site_uuid: str) -> dict[str, Any]:
+    """Attach routing provenance and a reusable qualified reference."""
+    asset_id = asset.get("id")
+    return {
+        **asset,
+        "site_uuid": site_uuid,
+        "asset_ref": {"site_uuid": site_uuid, "asset_id": asset_id},
+    }
+
+
 # ----------------------------------------------------------------------
 # Registration
 # ----------------------------------------------------------------------
@@ -352,6 +368,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     async def query_assets(
         site_uuid: str | None = None,
         site_name: str | None = None,
+        site_uuids: list[str] | None = None,
         kind: str | None = None,
         vendor: str | None = None,
         name_contains: str | None = None,
@@ -361,6 +378,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         hidden: bool | None = None,
         limit: int = 50,
         after: str | None = None,
+        after_by_site: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Filter OT assets and return a projected list.
 
@@ -368,6 +386,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             site_uuid: Site machine-id UUID. Provide this or `site_name`.
             site_name: Site name to resolve to machine-id UUID. Provide
                 this or `site_uuid`.
+            site_uuids: Site machine-id UUIDs for a multi-site query.
+                Cannot be combined with `site_uuid` or `site_name`.
             kind: Natural asset kind ("plc", "rtu", "ied", "hmi",
                 "controller", "switch", "router", "firewall", "iot",
                 "server", etc.). See ASSET_KIND_VALUES.
@@ -391,6 +411,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 continue, pass the `end_cursor` value from the previous
                 response. Keep paging while `has_more` is true to
                 retrieve every matching asset.
+            after_by_site: Per-site cursors for a multi-site query, keyed
+                by site UUID. Cannot be combined with `after`.
         """
         page_size = clamp_page_size(limit)
         filt = _build_asset_filter(
@@ -406,22 +428,44 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             variables["filter"] = filt
         if search:
             variables["search"] = search
-        if after:
-            variables["after"] = after
+        if after and after_by_site:
+            raise ValueError("after cannot be combined with after_by_site")
 
-        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
-        data = await client.query(_QUERY_ASSETS, variables=variables, icp_machine_id=machine_id)
-        block = data.get("assets") or {}
-        nodes = block.get("nodes") or []
-        page_info = block.get("pageInfo") or {}
-        label_map = await CustomFieldLabelCache.get_or_fetch(client, icp_machine_id=machine_id)
-        return {
-            "count": len(nodes),
-            "total_count": block.get("totalCount"),
-            "has_more": bool(page_info.get("hasNextPage")),
-            "end_cursor": page_info.get("endCursor"),
-            "assets": [_project_asset(n, label_map) for n in nodes],
-        }
+        site_ids = await resolve_read_site_ids(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+        )
+
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            site_variables = dict(variables)
+            cursor = after if len(site_ids) == 1 else (after_by_site or {}).get(machine_id)
+            if cursor:
+                site_variables["after"] = cursor
+            data = await client.query(
+                _QUERY_ASSETS,
+                variables=site_variables,
+                icp_machine_id=machine_id,
+            )
+            block = data.get("assets") or {}
+            nodes = block.get("nodes") or []
+            page_info = block.get("pageInfo") or {}
+            label_map = await CustomFieldLabelCache.get_or_fetch(client, icp_machine_id=machine_id)
+            return {
+                "site_uuid": machine_id,
+                "count": len(nodes),
+                "total_count": block.get("totalCount"),
+                "has_more": bool(page_info.get("hasNextPage")),
+                "end_cursor": page_info.get("endCursor"),
+                "assets": [
+                    _qualify_asset(_project_asset(node, label_map), machine_id) for node in nodes
+                ],
+            }
+
+        if len(site_ids) == 1:
+            return await query_site(site_ids[0])
+        return await run_multi_site_read(site_ids, query_site)
 
     @mcp.tool(
         title="Get one OT asset",
@@ -434,20 +478,32 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "`get_asset_vulnerabilities` separately."
         ),
     )
-    async def get_asset(asset_id: str) -> dict[str, Any]:
+    async def get_asset(
+        asset_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+    ) -> dict[str, Any]:
         """Fetch one asset by id.
 
         Args:
             asset_id: The asset's `id` field as returned by `query_assets`.
+            site_uuid: Site machine-id UUID. Provide this or `site_name`.
+            site_name: Site name to resolve to machine-id UUID. Provide
+                this or `site_uuid`.
         """
         if not asset_id:
             raise ValueError("asset_id is required")
-        data = await client.query(_GET_ASSET, variables={"id": asset_id})
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
+        data = await client.query(
+            _GET_ASSET,
+            variables={"id": asset_id},
+            icp_machine_id=machine_id,
+        )
         node = data.get("asset")
         if not node:
             return {"asset": None, "error": f"No asset with id {asset_id!r}."}
-        label_map = await CustomFieldLabelCache.get_or_fetch(client)
-        return {"asset": _project_asset(node, label_map)}
+        label_map = await CustomFieldLabelCache.get_or_fetch(client, icp_machine_id=machine_id)
+        return {"asset": _qualify_asset(_project_asset(node, label_map), machine_id)}
 
     @mcp.tool(
         title="Get vulnerabilities for one asset",
@@ -464,27 +520,46 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     )
     async def get_asset_vulnerabilities(
         asset_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
         limit: int = 100,
+        after: str | None = None,
     ) -> dict[str, Any]:
         """List vulnerabilities affecting one asset.
 
         Args:
             asset_id: The asset's `id` field as returned by `query_assets`.
-            limit: Maximum results (default 100, max 500).
+            site_uuid: Site machine-id UUID. Provide this or `site_name`.
+            site_name: Site name to resolve to machine-id UUID. Provide
+                this or `site_uuid`.
+            limit: Maximum results per page (default 100, max 500).
+            after: Opaque page cursor. Omit for the first page; to
+                continue, pass the `end_cursor` value from the previous
+                response.
         """
         if not asset_id:
             raise ValueError("asset_id is required")
         page_size = clamp_page_size(limit, default=100)
         variables: dict[str, Any] = {"id": asset_id, "pageSize": page_size}
-        data = await client.query(_GET_ASSET_VULNS, variables=variables)
+        if after:
+            variables["after"] = after
+        machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
+        data = await client.query(
+            _GET_ASSET_VULNS,
+            variables=variables,
+            icp_machine_id=machine_id,
+        )
         block = (data.get("asset") or {}).get("plugins") or {}
         nodes = block.get("nodes") or []
         page_info = block.get("pageInfo") or {}
         return {
             "asset_id": asset_id,
+            "site_uuid": machine_id,
+            "asset_ref": {"site_uuid": machine_id, "asset_id": asset_id},
             "count": len(nodes),
             "total_count": block.get("totalCount"),
             "has_more": bool(page_info.get("hasNextPage")),
+            "end_cursor": page_info.get("endCursor"),
             "vulnerabilities": [project_vuln(n) for n in nodes],
         }
 
@@ -504,19 +579,36 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "and translate to slots internally."
         ),
     )
-    async def list_custom_fields() -> dict[str, Any]:
+    async def list_custom_fields(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
+    ) -> dict[str, Any]:
         """List configured custom-field slots, labels, and value types."""
-        data = await client.query(_LIST_CUSTOM_FIELDS)
-        fields = data.get("customFields") or []
-        return {
-            "count": len(fields),
-            "max_slots": 10,
-            "custom_fields": [
-                {
-                    "field_id": f.get("fieldId"),
-                    "label": f.get("userDefinedName"),
-                    "value_type": f.get("valueType"),
-                }
-                for f in fields
-            ],
-        }
+        site_ids = await resolve_read_site_ids(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+        )
+
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            data = await client.query(_LIST_CUSTOM_FIELDS, icp_machine_id=machine_id)
+            fields = data.get("customFields") or []
+            return {
+                "site_uuid": machine_id,
+                "count": len(fields),
+                "max_slots": 10,
+                "custom_fields": [
+                    {
+                        "field_id": field.get("fieldId"),
+                        "label": field.get("userDefinedName"),
+                        "value_type": field.get("valueType"),
+                    }
+                    for field in fields
+                ],
+            }
+
+        if len(site_ids) == 1:
+            return await query_site(site_ids[0])
+        return await run_multi_site_read(site_ids, query_site)
