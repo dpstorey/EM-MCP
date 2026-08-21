@@ -13,11 +13,16 @@
 
 ### Quick Start
 
-1. Place `mcp` script in `/usr/local/bin` on your EM
-2. Create `/usr/local/mcp/data` directory
-3. Run `mcp build` to build the docker image
-4. Run `mcp run` to start the container
-5. Use the prompt in `prompt/AGENT.md` 
+Build the container:
+```bash 
+docker compose up -d --build --force-recreate tenable-ot
+```
+Verify
+```bash
+docker compose ps tenable-ot
+docker compose logs --tail=100 tenable-ot
+```
+Use the prompt in `prompt/AGENT.md` 
 
 ### Tool List
 A categorized tool list document is available in file `tot-mcp-tool-list.md`.
