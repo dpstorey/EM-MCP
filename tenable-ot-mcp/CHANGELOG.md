@@ -5,7 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+
+## [0.5.0] - 2026-08-21
+
+### Added
+- **Multi-site reads** — collection, search, list, and summary tools accept
+  `site_uuids`, with per-site provenance, pagination, and partial-error
+  reporting.
+- **CIDR-based asset searches** — `query_assets` accepts `subnet` for native
+  IPv4 and IPv6 CIDR-range filtering.
+- **Asset-scoped event searches** — `query_events` accepts `asset_id` to
+  retrieve events through the asset’s event connection.
+- **Site-qualified references** — asset, event, vulnerability, policy, scan,
+  group, and topology results retain their originating site for follow-up
+  calls.
+
+### Changed
+
+- **Explicit single-site writes** — every write requires exactly one
+  `site_uuid` or `site_name`; site arrays are not accepted for writes.
+- **Single-site detail reads** — entity and detail tools require one explicit
+  site selector.
+- Multi-site pagination uses independent per-site cursors through
+  `after_by_site`.
+
+### Fixed
+
+- Corrected site routing and pagination for `get_asset` and
+  `get_asset_vulnerabilities`.
+- Prevented asset UUIDs from being misused as free-text event searches.
+
+## [0.4.5] 
 
 ### Added
 - **Asset-scoped event queries** — `query_events(asset_id=...)` now traverses

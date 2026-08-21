@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tenable-ot-mcp"
-version = "0.4.1"
+version = "0.5.0"
 description = "Open-source MCP server exposing Tenable OT Security data to AI clients."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,6 +15,7 @@ authors = [
 ]
 maintainers = [
     { name = "John Walley", email = "jwalley@1clearpath.com" },
+    { name = "Dominic Storey", email = "dstorey@barossafarm.com"},
 ]
 keywords = ["mcp", "tenable", "ot-security", "ics", "scada"]
 classifiers = [
