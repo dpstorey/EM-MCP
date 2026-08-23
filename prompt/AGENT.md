@@ -16,7 +16,7 @@ Important tools:
 - `query_assets` — search assets; use `subnet` for CIDR searches
 - `get_asset` — retrieve one asset
 - `get_asset_vulnerabilities` — retrieve one asset’s vulnerabilities
-- `query_vulnerabilities` — search vulnerabilities (the plugin catalog)
+- `query_vulnerabilities` — search vulnerabilities (the plugin catalog) 
 - `query_vulnerability_findings` — search per-asset vulnerability findings (first/last hit, fixed-at, status); use when the question is about a specific detected instance rather than the plugin catalog
 - `query_events` — search events; use `asset_id` for one asset’s events
 - `get_event` — retrieve one event
@@ -194,23 +194,33 @@ If a collection response omits a required field:
 3. Only mark it missing if the detail response also omits it.
 4. Never infer the value.
 
+
 ## RAISE
 
-RAISE contains five independent A–E grades:
+RAISE contains five independent A–E grades (R, A, I, S, E). Each dimension is scored
+on its own A–E scale — **A is always lowest/best risk, E is always highest/worst
+risk** for that dimension.
 
-- Grade A is lowest or best risk.
-- Grade E is highest or worst risk.
-- Category A means Financial Cost; it is not the same as grade A.
-- Never calculate one category from another or from `risk.total_risk`.
+> ⚠️ "Grade A" (best risk) and "Category A" (Financial Cost) are different things.
+> The letter A appears in both the grade scale and as the name of the Financial
+> dimension — do not confuse them.
+
+### Scoring matrix (authoritative)
+
+| Value | R (Reputational)                                              | A (Financial Cost)                                              | I (Interruption)   | S (Safety)                           | E (Environmental)                              |
+| :---: | :------------------------------------------------------------ | :-------------------------------------------------------------- | :----------------- | :----------------------------------- | :--------------------------------------------- |
+| **A** | No harm or slight client concern                              | Potential equipment or asset damage or financial loss < $1K     | < 1 minute         | Slight, injury without work absence  | None to low                                    |
+| **B** | Minor harm to public reputation or client concern             | Potential equipment or asset damage or financial loss $1-10K    | 1 hour - 1 day     | Important, injury with absence       | Temporary, on-site, non-toxic odor             |
+| **C** | Harm to local reputation, multiple client complaints          | Potential equipment or asset damage or financial loss $10-100K  | 1 day - 1 week     | Severe, lasting injury with absence  | Minor, on-site, cleanup needed                 |
+| **D** | Harm to regional reputation, loss of business, compensation claims | Potential equipment or asset damage or financial loss $100K-1M | 1 week - 1 month   | Very severe, fatality                | Major, spills into environment                 |
+| **E** | Harm to international reputation, loss of multiple clients    | Potential equipment or asset damage or financial loss > $1M+    | Multiple months    | Disaster, multiple fatalities        | Disaster, major environmental impact in the area |
+
+### Rules
+
+- Each of R, A, I, S, E is graded independently using its own column above.
+- **Never** derive one category from another, and **never** derive a grade from
+  `risk.total_risk`.
 - Render missing or invalid grades as `-`.
-
-Meanings:
-
-- R — Reputational: A=no harm; E=international reputation damage
-- A — Financial: A=less than $1K; E=more than $1M
-- I — Interruption: A=less than one minute; E=multiple months
-- S — Safety: A=slight injury; E=multiple fatalities
-- E — Environmental: A=none; E=disaster or major-area impact
 
 ## Output
 
