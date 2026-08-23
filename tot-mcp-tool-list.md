@@ -42,6 +42,7 @@ Organised by functional category. All **Write** operations default to `dry_run`;
 | `get_asset_vulnerabilities` | Read | Returns vulnerabilities affecting one OT asset by ID. |
 | `query_vulnerabilities` | Read | Returns Tenable plugins matching filters. Includes CVE CVSS scores exploit flags (KEV/malware). Use with `get_vulnerability`. |
 | `get_vulnerability` | Read | Fetches single vulnerability by id with full affected asset list. Ideal for assessing exposure breadth of exploited vulns. |
+| `query_vulnerability_findings` | Read | Returns per-(asset × plugin) finding records (Tenable's `findings`/`Finding`, distinct from the `plugins` catalog) with their own id, first/last hit time, optional fixed-at, lifecycle status ('active'/'resolved'/'resurfaced'), and port/protocol/service. Filter by plugin id, CVE, severity floor, status, asset id, or time. |
 | `query_vulnerability_clusters` | Read | Returns per-asset vulnerabilities or global CVE search (CVE-substring or asset_ids). The AI walks results to find shared CVEs or leverage points. |
 
 ## Events & Detection Policies

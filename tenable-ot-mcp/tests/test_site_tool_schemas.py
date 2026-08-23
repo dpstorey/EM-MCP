@@ -70,6 +70,7 @@ def test_collection_reads_expose_site_arrays() -> None:
         "summarize_environment",
         "list_detection_policies",
         "query_policy_findings",
+        "query_vulnerability_findings",
         "list_sensors",
         "list_active_scans",
         "list_segments_and_zones",

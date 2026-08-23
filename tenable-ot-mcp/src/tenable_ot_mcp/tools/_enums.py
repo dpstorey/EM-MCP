@@ -101,6 +101,30 @@ def to_policy_level(natural: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# FindingStatus — the lifecycle state of a `findings` (vulnerability
+# finding) record. Verified live against Tenable OT/EM 4.7.44: exactly
+# three values, shared vocabulary with the Policy Violations UI
+# ("Active", "Resurfaced", "Resolved").
+# ---------------------------------------------------------------------------
+
+_FINDING_STATUS = {
+    "active": "Active",
+    "resolved": "Resolved",
+    "resurfaced": "Resurfaced",
+}
+
+FINDING_STATUS_VALUES = list(_FINDING_STATUS)
+
+
+def to_finding_status(natural: str) -> str:
+    """Translate "active" / "resolved" / "resurfaced" to Tenable's FindingStatus."""
+    v = (natural or "").strip().lower()
+    if v not in _FINDING_STATUS:
+        raise ValueError(f"status must be one of {FINDING_STATUS_VALUES}; got {natural!r}")
+    return _FINDING_STATUS[v]
+
+
+# ---------------------------------------------------------------------------
 # Asset category — the high-level grouping ("controller" / "network" / "iot")
 # ---------------------------------------------------------------------------
 

@@ -46,6 +46,7 @@ recorded in `/data/audit.jsonl`.
 |---|---|
 | `query_vulnerabilities` | Filter by CVE substring, severity floor, family, source. |
 | `get_vulnerability` | One plugin by id with full affected-asset list joined. |
+| `query_vulnerability_findings` | Per-(asset × plugin) finding records — the instances of a vulnerability actually detected on a specific asset, with their own id, first/last-hit time, optional fixed-at, lifecycle status ('active' / 'resolved' / 'resurfaced'), and port/protocol/service. Filter by plugin id / CVE / severity floor / status / asset id / time. |
 
 ### Event domain
 

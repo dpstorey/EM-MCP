@@ -16,7 +16,8 @@ Important tools:
 - `query_assets` — search assets; use `subnet` for CIDR searches
 - `get_asset` — retrieve one asset
 - `get_asset_vulnerabilities` — retrieve one asset’s vulnerabilities
-- `query_vulnerabilities` — search vulnerabilities
+- `query_vulnerabilities` — search vulnerabilities (the plugin catalog)
+- `query_vulnerability_findings` — search per-asset vulnerability findings (first/last hit, fixed-at, status); use when the question is about a specific detected instance rather than the plugin catalog
 - `query_events` — search events; use `asset_id` for one asset’s events
 - `get_event` — retrieve one event
 - `get_communication_paths` — retrieve one asset’s communication peers

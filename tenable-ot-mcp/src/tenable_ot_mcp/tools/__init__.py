@@ -31,11 +31,13 @@ def register_read_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> Non
         status,
         summary,
         topology,
+        vuln_findings,
         vulns,
     )
 
     assets.register_read_tools(mcp, client, audit)
     vulns.register_read_tools(mcp, client, audit)
+    vuln_findings.register_read_tools(mcp, client, audit)
     events.register_read_tools(mcp, client, audit)
     policies.register_read_tools(mcp, client, audit)
     topology.register_read_tools(mcp, client, audit)
