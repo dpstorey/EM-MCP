@@ -9,6 +9,13 @@ import pytest
 
 from tenable_ot_mcp.tools.events import register_read_tools
 
+# `site_uuids` (plural) is validated as well-formed UUIDs by the real
+# `_normalise_site_ids` (unlike singular `site_uuid`, which routes through
+# the mocked `FakeClient.resolve_site_machine_id` below and never touches
+# that validation), so the fan-out fixture below needs UUID-shaped ids.
+SITE_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+SITE_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
 
 class FakeMCP:
     def __init__(self) -> None:
@@ -102,9 +109,9 @@ async def test_query_events_asset_id_fans_out_with_per_site_cursors() -> None:
     register_read_tools(mcp, client, None)  # type: ignore[arg-type]
 
     result = await mcp.tools["query_events"](
-        site_uuids=["site-a", "site-b"],
+        site_uuids=[SITE_A, SITE_B],
         asset_id="asset-1",
-        after_by_site={"site-b": "cursor-b"},
+        after_by_site={SITE_B: "cursor-b"},
     )
 
     assert result["sites_succeeded"] == 2

@@ -10,7 +10,7 @@ import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ..tenable_client import TenableClient
+from ..tenable_client import TenableClient, validate_machine_id
 
 DEFAULT_SITE_CONCURRENCY = 4
 _WRITE_SITE_MACHINE_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -19,13 +19,21 @@ _WRITE_SITE_MACHINE_ID: contextvars.ContextVar[str | None] = contextvars.Context
 
 
 def _normalise_site_ids(site_uuids: list[str]) -> list[str]:
-    """Strip, validate, and de-duplicate site ids while preserving order."""
+    """Strip, validate, and de-duplicate site ids while preserving order.
+
+    Each id is validated as a well-formed UUID (see
+    `tenable_client.validate_machine_id`) — the `site_uuids` array skips
+    `TenableClient.resolve_site_machine_id` entirely (its entries are
+    already assumed to be machine ids, not names), so this is the only
+    place that catches a malformed id before it reaches the network.
+    """
     normalised: list[str] = []
     seen: set[str] = set()
     for raw_site_id in site_uuids:
         site_id = raw_site_id.strip("/").strip()
         if not site_id:
             raise ValueError("site_uuids cannot contain empty values")
+        site_id = validate_machine_id(site_id, field="site_uuids")
         if site_id not in seen:
             seen.add(site_id)
             normalised.append(site_id)

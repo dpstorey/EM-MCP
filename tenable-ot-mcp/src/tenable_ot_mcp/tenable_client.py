@@ -15,12 +15,50 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from typing import Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Tenable OT/EM site & ICP machine ids are canonical UUIDs, e.g.
+# "9b06f7ce-20ca-44d2-8927-4be792712345" (8-4-4-4-12 hex digits).
+_MACHINE_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def validate_machine_id(value: str, *, field: str = "site_uuid") -> str:
+    """Validate a Tenable site/ICP machine id and return it unchanged.
+
+    A malformed id (wrong length, missing/extra hex digits, wrong
+    grouping — e.g. a truncated or hand-typed UUID) is not rejected by
+    Tenable's GraphQL layer. Instead it gets relayed to
+    ``<base>/<machine_id>/graphql``, a path EM does not recognize as a
+    paired ICP; EM's web front end then answers with HTTP 200 and an
+    HTML page instead of a GraphQL error, which otherwise surfaces
+    downstream as an opaque "non-JSON response" transport error.
+
+    Catching the bad shape here — before any network call — produces a
+    message an LLM caller can act on directly: the fix is to re-fetch
+    the id (via `list_paired_icps`) and pass it through unmodified, not
+    to retry the same value or guess a correction.
+    """
+    candidate = (value or "").strip()
+    if not _MACHINE_ID_RE.match(candidate):
+        raise ValueError(
+            f"{field}={value!r} is not a valid Tenable site/ICP machine id. "
+            "Expected a complete UUID in 8-4-4-4-12 hex form, e.g. "
+            "'9b06f7ce-20ca-44d2-8927-4be792712345' "
+            f"(got {len(candidate)} character(s): {candidate!r}). "
+            "Do not guess, truncate, retype, or abbreviate this value — call "
+            "`list_paired_icps` to get the exact site machine id and pass it "
+            "through unmodified."
+        )
+    return candidate
+
 
 _QUERY_EM_PAIRED_ICPS = """
 query Q($pageSize: Int!) {
@@ -146,8 +184,25 @@ class TenableClient:
         try:
             body = resp.json()
         except json.JSONDecodeError as e:
+            content_type = resp.headers.get("content-type", "unknown")
+            snippet = " ".join(resp.text[:200].split())
+            relayed_through_icp = endpoint != f"{self.base_url}/graphql"
+            hint = (
+                " This response did not come from the GraphQL API — most often "
+                "it means the ICP machine id in the relay URL does not match a "
+                "currently paired site (a wrong, truncated, or hand-typed "
+                "site_uuid/icp_machine_id). Call `list_paired_icps` to get the "
+                "exact machine id and retry with it unmodified; do not retry "
+                "with the same value."
+                if relayed_through_icp
+                else " This response did not come from the GraphQL API — check "
+                "that `tenable_url` points at the GraphQL-serving host/port, "
+                "not a web UI or load balancer front door."
+            )
             raise TenableError(
-                f"Tenable OT/EM returned non-JSON response (HTTP {resp.status_code})",
+                f"Tenable OT/EM returned a non-JSON response (HTTP {resp.status_code}, "
+                f"content-type={content_type!r}) from {endpoint}. "
+                f"First bytes of body: {snippet!r}.{hint}",
                 status=resp.status_code,
             ) from e
 
@@ -235,12 +290,13 @@ class TenableClient:
     ) -> str:
         """Resolve target site to machine id.
 
-        `site_uuid` is treated as the machine id directly. When `site_name`
-        is provided, resolve through EM paired-ICP inventory and cache the
-        result on this client instance.
+        `site_uuid` is treated as the machine id directly (and validated
+        as a well-formed UUID before use). When `site_name` is provided,
+        resolve through EM paired-ICP inventory and cache the result on
+        this client instance.
         """
         if site_uuid:
-            return site_uuid.strip("/")
+            return validate_machine_id(site_uuid.strip("/"), field="site_uuid")
         if not site_name:
             raise ValueError("site_uuid or site_name is required")
 

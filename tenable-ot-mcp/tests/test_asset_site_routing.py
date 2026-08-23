@@ -9,6 +9,13 @@ import pytest
 
 from tenable_ot_mcp.tools.assets import CustomFieldLabelCache, register_read_tools
 
+# `site_uuids` (plural) is validated as well-formed UUIDs by the real
+# `_normalise_site_ids` (unlike singular `site_uuid`, which routes through
+# the mocked `FakeClient.resolve_site_machine_id` below and never touches
+# that validation), so fixtures exercising it need UUID-shaped ids.
+SITE_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+SITE_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
 
 class FakeMCP:
     def __init__(self) -> None:
@@ -146,19 +153,19 @@ async def test_query_assets_fans_out_and_preserves_site_provenance() -> None:
     register_read_tools(mcp, client, None)  # type: ignore[arg-type]
 
     result = await mcp.tools["query_assets"](
-        site_uuids=["site-a", "site-b", "site-a"],
-        after_by_site={"site-a": "previous-a"},
+        site_uuids=[SITE_A, SITE_B, SITE_A],
+        after_by_site={SITE_A: "previous-a"},
     )
 
     assert result["sites_requested"] == 2
     assert result["sites_succeeded"] == 2
     assert result["sites_failed"] == 0
     by_site = {entry["site_uuid"]: entry for entry in result["results"]}
-    assert by_site["site-a"]["assets"][0]["asset_ref"] == {
-        "site_uuid": "site-a",
+    assert by_site[SITE_A]["assets"][0]["asset_ref"] == {
+        "site_uuid": SITE_A,
         "asset_id": "asset-a",
     }
-    assert by_site["site-b"]["assets"][0]["site_uuid"] == "site-b"
+    assert by_site[SITE_B]["assets"][0]["site_uuid"] == SITE_B
     asset_queries = [call for call in client.query_calls if "assets(" in call["query"]]
     assert asset_queries[0]["variables"]["after"] == "previous-a"
     assert "after" not in asset_queries[1]["variables"]
@@ -205,7 +212,7 @@ async def test_query_assets_rejects_invalid_subnet() -> None:
 async def test_multi_site_read_returns_partial_failures() -> None:
     client = FakeClient(
         [
-            RuntimeError("site-a unavailable"),
+            RuntimeError("site unavailable"),
             {
                 "assets": {
                     "nodes": [],
@@ -219,11 +226,11 @@ async def test_multi_site_read_returns_partial_failures() -> None:
     mcp = FakeMCP()
     register_read_tools(mcp, client, None)  # type: ignore[arg-type]
 
-    result = await mcp.tools["query_assets"](site_uuids=["site-a", "site-b"])
+    result = await mcp.tools["query_assets"](site_uuids=[SITE_A, SITE_B])
 
     assert result["sites_succeeded"] == 1
     assert result["sites_failed"] == 1
-    assert result["errors"] == [{"site_uuid": "site-a", "error": "site-a unavailable"}]
+    assert result["errors"] == [{"site_uuid": SITE_A, "error": "site unavailable"}]
 
 
 async def test_multi_site_selector_rejects_conflicting_inputs() -> None:
@@ -256,10 +263,10 @@ async def test_list_custom_fields_routes_across_sites() -> None:
     mcp = FakeMCP()
     register_read_tools(mcp, client, None)  # type: ignore[arg-type]
 
-    result = await mcp.tools["list_custom_fields"](site_uuids=["site-a", "site-b"])
+    result = await mcp.tools["list_custom_fields"](site_uuids=[SITE_A, SITE_B])
 
     assert result["sites_succeeded"] == 2
     assert [call["icp_machine_id"] for call in client.query_calls] == [
-        "site-a",
-        "site-b",
+        SITE_A,
+        SITE_B,
     ]
