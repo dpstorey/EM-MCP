@@ -1,8 +1,8 @@
 ## Enterprise Manager version of John Walley's Tenable OT MCP
 
-**Version**: 0.5.0 (based on GitLab tenable-ot-mcp v0.4.5)  
+**Version**: 0.5.3 (based on GitLab tenable-ot-mcp v0.4.5)  
 **Upstream**: https://gitlab.com/jwalley/tenable-ot-mcp  
-**Modified**: 2026-07-27
+**Modified**: 2026-08-24
 
 ### EM-Specific Enhancements
 
@@ -11,6 +11,8 @@
 - **Machine ID caching**: Automatic site name → machine ID resolution and caching
 - **EM root queries**: `list_paired_icps` bypasses relay, queries EM directly
 - **Subnet queries**: Assets can be queried by subnet, e.g. 10.253.10.128/25
+- **Findings**: Vulnerability and policy findings can be queried
+
 ### Quick Start
 
 Build the container:
