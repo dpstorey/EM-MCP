@@ -30,6 +30,39 @@ _MACHINE_ID_RE = re.compile(
 )
 
 
+def _extract_pagination_debug(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Pull `{nodes, totalCount, pageInfo}`-shaped debug facts out of a
+    GraphQL response body for `MCP_DEBUG_GRAPHQL=1` logging.
+
+    Every paginated connection this client queries (`plugins`,
+    `policies`, `policyFindings`, ...) shares this shape, so this is
+    written generically against whichever top-level field is present
+    rather than one helper per query. Reports the first/last node id on
+    the page alongside `endCursor` so a debug log can show at a glance
+    whether two successive calls actually advanced (different ids,
+    different cursor) or reran the same page (identical ids/cursor
+    despite a supposedly-different `after`).
+    """
+    if not isinstance(data, dict):
+        return None
+    for key, block in data.items():
+        if isinstance(block, dict) and "pageInfo" in block:
+            nodes = block.get("nodes") or []
+            page_info = block.get("pageInfo") or {}
+            first_id = nodes[0].get("id") if nodes and isinstance(nodes[0], dict) else None
+            last_id = nodes[-1].get("id") if nodes and isinstance(nodes[-1], dict) else None
+            return {
+                "field": key,
+                "totalCount": block.get("totalCount"),
+                "nodeCount": len(nodes),
+                "firstNodeId": first_id,
+                "lastNodeId": last_id,
+                "hasNextPage": page_info.get("hasNextPage"),
+                "endCursor": page_info.get("endCursor"),
+            }
+    return None
+
+
 def validate_machine_id(value: str, *, field: str = "site_uuid") -> str:
     """Validate a Tenable site/ICP machine id and return it unchanged.
 
@@ -152,14 +185,20 @@ class TenableClient:
 
         endpoint = self._endpoint_for(use_em_root=use_em_root, icp_machine_id=icp_machine_id)
         if self._debug_graphql:
+            # Log the actual variables (not just key names) — the whole
+            # point of this flag is to answer "did `after` actually change
+            # between successive calls?", which `vars_keys` alone can't
+            # show. None of these values (pageSize/after/filter/search)
+            # are secrets; the API key lives only in `_headers()` and is
+            # never included here.
             logger.info(
                 "Tenable GraphQL request endpoint=%s use_em_root=%s "
-                "icp_machine_id=%s op=%s vars_keys=%s",
+                "icp_machine_id=%s op=%s variables=%s",
                 endpoint,
                 use_em_root,
                 icp_machine_id,
                 operation_name or "Q",
-                sorted((variables or {}).keys()),
+                variables,
             )
 
         try:
@@ -210,7 +249,16 @@ class TenableClient:
             messages = "; ".join(e.get("message", str(e)) for e in body["errors"])
             raise TenableError(f"Tenable OT/EM GraphQL errors: {messages}", status=resp.status_code)
 
-        return body.get("data") or {}
+        data = body.get("data") or {}
+        if self._debug_graphql:
+            pagination = _extract_pagination_debug(data)
+            logger.info(
+                "Tenable GraphQL response endpoint=%s op=%s pagination=%s",
+                endpoint,
+                operation_name or "Q",
+                pagination,
+            )
+        return data
 
     async def healthcheck(self) -> bool:
         """Issue a trivial query to verify connectivity + auth.
