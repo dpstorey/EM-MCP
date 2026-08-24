@@ -27,21 +27,37 @@ Filter scope notes (verified live):
   • `query_vulnerabilities`' `vpr_at_least` implements exactly that
     client-side pattern for `vprScore` — don't move it into
     `_build_vuln_filter`/the GraphQL `filter` argument, that reproduces
-    the 500 above. A single server page can easily come back with
-    fewer VPR-qualifying rows than `limit` (or zero) purely by chance,
-    even with plenty more qualifying rows on later pages — and in
-    practice, calling LLMs did not reliably notice `has_more` and keep
-    paging to compensate (observed: a "top 20" request silently came
-    back with 9). So when `vpr_at_least` is set, `query_vulnerabilities`
-    fetches additional server pages itself, internally, until it has
-    `limit` matches or the site truly runs out (capped at
-    `_MAX_VPR_PAGES_PER_CALL` page-fetches per call, to bound worst-case
-    latency when the floor is very selective) — see `query_site` below.
-    `total_count`/`has_more`/`end_cursor` still describe the server's
-    pagination over every *other* filter, not the VPR-narrowed subset;
-    if `has_more` comes back true and fewer than `limit` matches were
-    found, the safety cap was hit and a caller wanting more should still
-    page again with the returned `end_cursor`.
+    the 500 above. Filtering client-side only works if the pages being
+    scanned are in a useful order, though: `plugins` has no default
+    ordering (confirmed by comparing two live runs of the identical
+    filter/page-size against the same site — they walked through
+    different subsets of the same result set), so without an explicit
+    `sort`, which VPR-qualifying rows land inside however many pages
+    got scanned is arbitrary and inconsistent run to run (observed
+    live: the same "VPR >= 7.0" request returned 9 matches one run, 1
+    the next). `plugins` does accept `sort: [PluginSortParams!]`
+    though (confirmed via live schema introspection), and `PluginField`
+    includes `vprScore` — so when `vpr_at_least` is set, this query
+    sorts `vprScore` `DescNullLast` and walks pages in that order. That
+    turns client-side VPR filtering from "an arbitrary sample of
+    however many pages we scanned" into "provably every qualifying row,
+    or definitely none remain": once a page's nodes drop below the
+    threshold, every remaining node on that page and every later page
+    is guaranteed to also be below it (nulls sort last, so a `None`
+    score is an equally valid stopping point), so `query_site` below
+    stops right there rather than guessing from a page count. A
+    worst-case fallback cap (`_MAX_VPR_PAGES_PER_CALL`) still bounds
+    latency for a pathological case — a `vpr_at_least` floor low enough
+    that huge numbers of plugins qualify — but for a selective floor
+    (the normal case) the descending sort means the loop now proves
+    completion, usually within one or two pages.
+    `total_count` still describes the server's pagination over every
+    *other* filter, not the VPR-narrowed subset. `has_more` is set to
+    `False` whenever the loop proved no further page can contain a
+    match (the common case); it only carries the server's raw
+    `hasNextPage` through when the loop stopped because `limit` was
+    reached first or the safety cap was hit — in those cases, paging
+    again with the returned `end_cursor` may turn up more.
   • `kev_only`, `exploit_available`, etc. live on `PluginDetails`,
     NOT in the top-level `PluginField` filter enum — fetch results
     and inspect the projected flags client-side.
@@ -160,13 +176,21 @@ _VULN_FIELDS = _build_selection(list(_FIELD_REGISTRY))
 
 _QUERY_VULNS = (
     "query Q($pageSize: Int!, $after: String, "
-    "$filter: PluginExpressionsParams, $search: String) { "
-    "plugins(first: $pageSize, after: $after, filter: $filter, search: $search) { "
+    "$filter: PluginExpressionsParams, $search: String, "
+    "$sort: [PluginSortParams!]) { "
+    "plugins(first: $pageSize, after: $after, filter: $filter, search: $search, "
+    "sort: $sort) { "
     "pageInfo { hasNextPage endCursor } totalCount "
     "nodes { " + _VULN_FIELDS + " } "
     "} "
     "}"
 )
+
+# Sort applied when `vpr_at_least` is set, so client-side VPR filtering
+# scans pages in descending-VPR order (see module docstring) rather than
+# whatever unstable default order the server hands back. Only built when
+# needed — an unrelated call shouldn't have its ordering changed by this.
+_VPR_DESCENDING_SORT = [{"field": "vprScore", "direction": "DescNullLast"}]
 
 
 _AFFECTED_ASSET_FIELDS = "id name type vendor model criticality firstSeen lastSeen"
@@ -312,14 +336,18 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "Rating) floor, e.g. 7.0 — Tenable's continuous 0.1-10.0 "
             "daily-recomputed threat-priority score, independent of "
             "severity. Applied client-side (Tenable's API doesn't "
-            "support server-side VPR thresholds); this tool fetches "
-            "additional pages internally as needed to try to return "
-            "`limit` matches in one call. If `has_more` still comes "
-            "back true alongside fewer than `limit` results, the VPR "
-            "floor is unusually selective — call again with the "
-            "returned `end_cursor` as `after` to keep collecting. "
-            "`total_count` reflects the other filters only, not this "
-            "one.\n"
+            "support server-side VPR thresholds); this tool sorts by "
+            "VPR descending internally and fetches additional pages as "
+            "needed, stopping as soon as it proves no further page can "
+            "contain a match — normally within one or two calls, "
+            "regardless of how rare the matches are. If `has_more` "
+            "still comes back true alongside fewer than `limit` "
+            "results, `limit` was reached first or an internal safety "
+            "cap was hit (only possible when an extremely low floor "
+            "makes a very large fraction of plugins qualify) — call "
+            "again with the returned `end_cursor` as `after` to keep "
+            "collecting. `total_count` reflects the other filters "
+            "only, not this one.\n"
             "  • cve: a CVE substring (e.g. 'CVE-2023-25619' or "
             "'CVE-2023' for a year-bucket)\n"
             "  • source: which detection engine found it — one of "
@@ -392,6 +420,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
 
         async def query_site(machine_id: str) -> dict[str, Any]:
             site_variables = dict(variables)
+            if vpr_threshold is not None:
+                site_variables["sort"] = _VPR_DESCENDING_SORT
             end_cursor = after if len(site_ids) == 1 else (after_by_site or {}).get(machine_id)
 
             vulnerabilities: list[dict[str, Any]] = []
@@ -417,12 +447,19 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 server_has_more = bool(page_info.get("hasNextPage"))
                 pages_fetched += 1
 
+                # Sorted `vprScore` DescNullLast when vpr_threshold is set
+                # (see module docstring): the first node that fails the
+                # floor proves every remaining node — rest of this page,
+                # every later page — also fails it, so stop right there
+                # instead of scanning on.
+                vpr_exhausted = False
                 for node in nodes:
                     vulnerability = project_vuln(node)
                     if vpr_threshold is not None:
                         vpr_score = vulnerability.get("vpr_score")
                         if vpr_score is None or float(vpr_score) < vpr_threshold:
-                            continue
+                            vpr_exhausted = True
+                            break
                     vulnerability["site_uuid"] = machine_id
                     vulnerability["vulnerability_ref"] = {
                         "site_uuid": machine_id,
@@ -433,6 +470,11 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 if vpr_threshold is None:
                     # No client-side filter in play — one server page per
                     # call, exactly as before this loop existed.
+                    break
+                if vpr_exhausted:
+                    # Proven complete: no further page can contain a
+                    # match, regardless of the server's raw hasNextPage.
+                    server_has_more = False
                     break
                 if len(vulnerabilities) >= page_size:
                     break

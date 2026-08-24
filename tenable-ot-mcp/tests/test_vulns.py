@@ -9,8 +9,19 @@ applied client-side to each fetched page rather than pushed into the
 GraphQL `filter` argument. These tests pin that behavior: the raw
 GraphQL variables sent to `client.query` must never carry a vpr-related
 expression, and the returned `count`/`vulnerabilities` must reflect the
-post-filter set while `total_count`/`has_more`/`end_cursor` pass through
-the server's (pre-vpr-filter) pagination state unchanged.
+post-filter set while `total_count` passes through the server's
+(pre-vpr-filter) pagination state unchanged.
+
+Client-side filtering is only trustworthy if the pages being scanned
+are in a useful order: live introspection showed `plugins` has no
+default ordering (two identical live runs of the same filter walked
+different subsets of the same result set), so `vpr_at_least` also adds
+an explicit `sort: [{field: vprScore, direction: DescNullLast}]` and
+the loop stops as soon as a node fails the floor — every remaining
+node, this page and every later one, is guaranteed to also fail it.
+`has_more` reflects that proof: `False` once exhaustion is proven,
+otherwise the server's raw signal (when `limit` was reached or the
+safety cap was hit first).
 
 `source` (detection engine) values — 'Nessus' / 'NNM' / 'Tot' — were
 captured from the product UI's own `getPluginsGrouped` GraphQL traffic,
@@ -220,19 +231,23 @@ async def test_query_vulnerabilities_vpr_filter_fetches_more_pages_to_fill_limit
     # vpr_at_least got back only 9 results from a single server page,
     # even though has_more was true and more qualifying rows existed on
     # later pages — the calling LLM didn't reliably keep paging itself.
-    # query_vulnerabilities must now do that internally.
+    # query_vulnerabilities must now do that internally. Both pages'
+    # scores stay globally descending (9.0, 8.0, 7.5, 7.2) and never dip
+    # below the 7.0 floor, matching what a real `sort: vprScore
+    # DescNullLast` page-2 would look like — the loop fills `limit`
+    # across two fetches without ever proving exhaustion.
     client = FakeClient(
         [
             {
                 "plugins": {
-                    "nodes": [_plugin_node("1", 8.0), _plugin_node("2", 1.0)],
+                    "nodes": [_plugin_node("1", 9.0), _plugin_node("2", 8.0)],
                     "totalCount": 4,
                     "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
                 }
             },
             {
                 "plugins": {
-                    "nodes": [_plugin_node("3", 9.0), _plugin_node("4", 2.0)],
+                    "nodes": [_plugin_node("3", 7.5), _plugin_node("4", 7.2)],
                     "totalCount": 4,
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
                 }
@@ -242,23 +257,109 @@ async def test_query_vulnerabilities_vpr_filter_fetches_more_pages_to_fill_limit
     mcp = FakeMCP()
     register_read_tools(mcp, client, None)  # type: ignore[arg-type]
 
-    result = await mcp.tools["query_vulnerabilities"](site_uuid="site-a", vpr_at_least=7.0, limit=2)
+    result = await mcp.tools["query_vulnerabilities"](site_uuid="site-a", vpr_at_least=7.0, limit=4)
 
     assert len(client.query_calls) == 2
     assert client.query_calls[1]["variables"]["after"] == "cursor-1"
-    assert [v["plugin_id"] for v in result["vulnerabilities"]] == ["1", "3"]
-    assert result["count"] == 2
+    assert [v["plugin_id"] for v in result["vulnerabilities"]] == ["1", "2", "3", "4"]
+    assert result["count"] == 4
     assert result["total_count"] == 4
+    # Reached `limit` right as the server's last page ended — has_more
+    # correctly reflects the server's raw (false) signal, not a proven
+    # exhaustion (no node ever dropped below the floor).
     assert result["has_more"] is False
 
 
+async def test_query_vulnerabilities_vpr_filter_proves_exhaustion_before_server_pages_end() -> None:
+    # The core of the fix: once a page (sorted vprScore DescNullLast)
+    # yields a node below the floor, every remaining node — the rest of
+    # this page, and every later page — is guaranteed to also be below
+    # it, so has_more is reported False even though the server's raw
+    # hasNextPage says there's more data (just none of it qualifying).
+    # This is what turns "9 vs. 1 vs. who knows" into a provably
+    # complete answer after a single page.
+    client = FakeClient(
+        [
+            {
+                "plugins": {
+                    "nodes": [_plugin_node("1", 8.0), _plugin_node("2", 5.0)],
+                    "totalCount": 500,
+                    "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+                }
+            }
+        ]
+    )
+    mcp = FakeMCP()
+    register_read_tools(mcp, client, None)  # type: ignore[arg-type]
+
+    result = await mcp.tools["query_vulnerabilities"](
+        site_uuid="site-a", vpr_at_least=7.0, limit=50
+    )
+
+    assert len(client.query_calls) == 1
+    assert [v["plugin_id"] for v in result["vulnerabilities"]] == ["1"]
+    assert result["count"] == 1
+    assert result["has_more"] is False
+
+
+async def test_query_vulnerabilities_vpr_at_least_sends_descending_vpr_sort() -> None:
+    client = FakeClient(
+        [
+            {
+                "plugins": {
+                    "nodes": [_plugin_node("1", 8.0)],
+                    "totalCount": 1,
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        ]
+    )
+    mcp = FakeMCP()
+    register_read_tools(mcp, client, None)  # type: ignore[arg-type]
+
+    await mcp.tools["query_vulnerabilities"](site_uuid="site-a", vpr_at_least=7.0)
+
+    assert client.query_calls[0]["variables"]["sort"] == [
+        {"field": "vprScore", "direction": "DescNullLast"}
+    ]
+
+
+async def test_query_vulnerabilities_without_vpr_at_least_sends_no_sort() -> None:
+    # A call with no vpr_at_least shouldn't have its ordering changed —
+    # the sort is only added when it's needed to make client-side VPR
+    # filtering provably complete.
+    client = FakeClient(
+        [
+            {
+                "plugins": {
+                    "nodes": [_plugin_node("1", 8.0)],
+                    "totalCount": 1,
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        ]
+    )
+    mcp = FakeMCP()
+    register_read_tools(mcp, client, None)  # type: ignore[arg-type]
+
+    await mcp.tools["query_vulnerabilities"](site_uuid="site-a")
+
+    assert "sort" not in client.query_calls[0]["variables"]
+
+
 async def test_query_vulnerabilities_vpr_filter_respects_page_cap() -> None:
+    # Every page's sole node still qualifies (9.0 >= 7.0), so the loop
+    # never proves exhaustion, and the site claims far more (999) than
+    # fit in `limit` (100), so it never fills `limit` either — the only
+    # remaining exit is the safety cap, bounding latency for a floor low
+    # enough that a huge fraction of plugins qualify. has_more stays
+    # true so a caller can still page onward.
     from tenable_ot_mcp.tools.vulns import _MAX_VPR_PAGES_PER_CALL
 
     responses = [
         {
             "plugins": {
-                "nodes": [_plugin_node(str(i), 1.0)],  # never qualifies (< 7.0)
+                "nodes": [_plugin_node(str(i), 9.0)],
                 "totalCount": 999,
                 "pageInfo": {"hasNextPage": True, "endCursor": f"cursor-{i}"},
             }
@@ -273,10 +374,8 @@ async def test_query_vulnerabilities_vpr_filter_respects_page_cap() -> None:
         site_uuid="site-a", vpr_at_least=7.0, limit=100
     )
 
-    # Stops at the cap rather than looping forever against a near-empty
-    # match rate; has_more stays true so a caller can still page onward.
     assert len(client.query_calls) == _MAX_VPR_PAGES_PER_CALL
-    assert result["count"] == 0
+    assert result["count"] == _MAX_VPR_PAGES_PER_CALL
     assert result["has_more"] is True
 
 
