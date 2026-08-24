@@ -14,7 +14,7 @@ from . import __version__
 BANNER = r"""
    ╔══════════════════════════════════════════════╗
    ║  Tenable OT MCP Server                       ║
-   ║  Open source · Apache 2.0 · v{version:<16} ║
+   ║  Open source · Apache 2.0 · v{version:<15} ║
    ║  https://github.com/dpstorey/EM-MCP          ║
    ╚══════════════════════════════════════════════╝
 """

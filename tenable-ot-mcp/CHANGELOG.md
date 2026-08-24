@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.5.3] - 2026-08-24
+
+### Fixed
+- **`query_vulnerabilities`' `vpr_at_least` now proves it found every
+  match, instead of scanning a fixed, arbitrary number of pages.** Live
+  schema introspection showed `plugins` has no default ordering — two
+  identical live runs of the same filter/page-size walked through
+  different subsets of the same result set, which is why the same
+  "VPR >= 7.0" request had returned 9 matches one run and 1 the next.
+  `plugins` does accept `sort: [PluginSortParams!]` though, and
+  `PluginField` includes `vprScore`, so this query now sorts `vprScore`
+  `DescNullLast` and stops as soon as a page's node drops below the
+  floor — every remaining node, this page and every later one, is
+  guaranteed to also be below it. Verified live against Tenable OT's
+  own UI: both agree on exactly 9 TOT vulnerabilities with VPR >= 7.0
+  for the reproduction site.
+
 ## [0.5.2] - 2026-08-24
 
 ### Changed
