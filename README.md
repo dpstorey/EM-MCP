@@ -33,5 +33,4 @@ A categorized tool list document is available in file `tot-mcp-tool-list.md`.
 - Added field selection infrastructure for vulnerability queries (reduces bandwidth)
 - Version synchronization with upstream releases
 
-See `ANALYSIS.md` for detailed change log and architecture recommendations
 

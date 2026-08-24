@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.5.1] - 2026-08-24
+
+### Added
+- **`query_vulnerability_findings`** — per-(asset x plugin) vulnerability
+  finding records (first/last hit, fixed-at, lifecycle status), the
+  vulnerability-side analog of `query_policy_findings`. Field and filter
+  names were confirmed against a live Tenable OT/EM 4.7.44 instance via
+  GraphQL schema introspection.
+
+### Fixed
+- **`site_uuid` / `site_uuids` validation** — malformed site identifiers
+  are now rejected before the request reaches Tenable, with an error
+  message that tells the caller to re-fetch the value from
+  `list_paired_icps` rather than guess, truncate, or retype it.
+- **Clearer non-JSON-response diagnostics** — the "Tenable OT/EM returned
+  non-JSON response" error now includes the response content-type, a
+  body snippet, and (when the request was relayed through a site-scoped
+  ICP) a hint to check the relay routing versus a direct `tenable_url`
+  mismatch.
+
 ## [0.5.0] - 2026-08-21
 
 ### Added

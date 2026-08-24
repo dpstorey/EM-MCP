@@ -258,7 +258,7 @@ across every AI tool you adopt.
 
 ## Tools
 
-114 tools across 11 categories: 48 read tools always available, 66
+117 tools across 11 categories: 51 read tools always available, 66
 write tools that register only when the operator enables write
 access at setup time. Full per-tool reference in
 [`docs/TOOL_CATALOG.md`](docs/TOOL_CATALOG.md).
@@ -268,7 +268,9 @@ Headlines:
 - **Asset domain** — `query_assets`, `get_asset`, `get_asset_vulnerabilities`,
   `list_custom_fields`; asset queries support exact CIDR filtering through
   `subnet` in addition to free-text search
-- **Vulnerability domain** — `query_vulnerabilities`, `get_vulnerability`
+- **Vulnerability domain** — `query_vulnerabilities`, `get_vulnerability`,
+  `query_vulnerability_findings` (per-asset finding instances: first/last
+  hit, fixed-at, lifecycle status — as opposed to the plugin catalog)
 - **Event domain** — `query_events`, `get_event`; event queries accept an
   explicit `asset_id` for asset-scoped event history
 - **Detection policies** — `list_detection_policies`, `query_policy_findings`

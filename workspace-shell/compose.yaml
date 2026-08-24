@@ -7,6 +7,6 @@ services:
     container_name: workspace-shell
     restart: unless-stopped
     volumes:
-      - /home/dstorey/llm-scratch:/llm-scratch
+      - ${WORKSPACE_HOST_DIR:-./llm-scratch}:/llm-scratch
     ports:
       - "8000:8000"

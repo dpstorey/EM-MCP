@@ -1,1 +1,4 @@
 tenable-ot-mcp-data/
+.DS_Store
+.env
+
