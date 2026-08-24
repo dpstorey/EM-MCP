@@ -44,7 +44,7 @@ recorded in `/data/audit.jsonl`.
 
 | Tool | One-line purpose |
 |---|---|
-| `query_vulnerabilities` | Filter by CVE substring, severity floor, family, source. |
+| `query_vulnerabilities` | Filter by CVE substring, severity floor, VPR floor (`vpr_at_least`, applied client-side per page since Tenable's API 500s on server-side VPR range filters), family, source ('nessus' / 'nnm' / 'tot' — detection engine). |
 | `get_vulnerability` | One plugin by id with full affected-asset list joined. |
 | `query_vulnerability_findings` | Per-(asset × plugin) finding records — the instances of a vulnerability actually detected on a specific asset, with their own id, first/last-hit time, optional fixed-at, lifecycle status ('active' / 'resolved' / 'resurfaced'), and port/protocol/service. Filter by plugin id / CVE / severity floor / status / asset id / time. |
 

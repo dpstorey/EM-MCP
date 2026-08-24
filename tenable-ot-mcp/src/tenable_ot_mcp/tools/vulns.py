@@ -11,11 +11,28 @@ Filter scope notes (verified live):
     Critical) — supported via Equal / In.
   • `name` Like '%CVE-2023-12345%' — works for CVE-substring matching.
   • `family`, `source`, `owner` — exact-match filters supported.
+  • `source` (detection engine) values confirmed from the product UI's
+    own network traffic (its `getPluginsGrouped` query, captured via
+    browser devtools, not independently reintrospected against the
+    `plugins` root field this module calls — `source` is a plain field
+    on the same `Plugin` type either way, so this should carry over,
+    but flag it if `source` filtering behaves unexpectedly on
+    `plugins`): `Nessus` (active scan), `NNM` (Nessus Network Monitor,
+    passive), `Tot` (Tenable OT's own native/passive detection engine).
   • Numeric filters on `cvss3Score`, `affectedAssets`, `vprScore` are
     NOT supported by this GraphQL surface (Tenable returns 500 with
     "cannot use array or slice with less than or greater than
     operators"). For score-based prioritization, fetch and sort/filter
     on the projected fields client-side.
+  • `query_vulnerabilities`' `vpr_at_least` implements exactly that
+    client-side pattern for `vprScore` — don't move it into
+    `_build_vuln_filter`/the GraphQL `filter` argument, that reproduces
+    the 500 above. Because the threshold is applied after each page is
+    fetched, `total_count`/`has_more`/`end_cursor` reflect the server's
+    match count for every *other* filter, not the VPR-narrowed subset;
+    callers must keep paging on `has_more` to see every match, and a
+    given page may come back with fewer than `limit` items (or zero)
+    even though later pages still contain qualifying vulnerabilities.
   • `kev_only`, `exploit_available`, etc. live on `PluginDetails`,
     NOT in the top-level `PluginField` filter enum — fetch results
     and inspect the projected flags client-side.
@@ -175,6 +192,41 @@ def _to_severity_at_least(natural: str) -> list[str]:
     return [_SEVERITY_NATURAL_TO_TENABLE[k] for k in _SEVERITY_ORDINAL[idx:]]
 
 
+# VPR (Vulnerability Priority Rating) is a continuous 0.1-10.0 score Tenable
+# recomputes daily from live threat intelligence — distinct from the static,
+# CVSS-derived `severity` band above. Tenable's GraphQL surface 500s on
+# relational operators against `vprScore` (see module docstring), so this
+# threshold can't join `_build_vuln_filter`; it's applied client-side to each
+# fetched page instead, in `query_vulnerabilities` below.
+def _validate_vpr_at_least(value: float | int | str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"vpr_at_least must be a number; got {value!r}") from None
+    return threshold
+
+
+# Detection-engine source — natural vocabulary → Tenable's exact casing.
+# Confirmed from the product UI's own `getPluginsGrouped` query traffic
+# (see module docstring), not independent introspection.
+_SOURCE_CANONICAL = {
+    "NESSUS": "Nessus",
+    "NNM": "NNM",
+    "TOT": "Tot",
+    "TENABLE_OT": "Tot",
+}
+SOURCE_VALUES = ["nessus", "nnm", "tot"]
+
+
+def _to_source(natural: str) -> str:
+    v = (natural or "").strip().upper().replace(" ", "_").replace(".", "_")
+    if v not in _SOURCE_CANONICAL:
+        raise ValueError(f"source must be one of {SOURCE_VALUES}; got {natural!r}")
+    return _SOURCE_CANONICAL[v]
+
+
 def _build_vuln_filter(
     *,
     cve: str | None,
@@ -191,7 +243,7 @@ def _build_vuln_filter(
     if family:
         parts.append(expr("family", EXPR_EQUAL, [family]))
     if source:
-        parts.append(expr("source", EXPR_EQUAL, [source]))
+        parts.append(expr("source", EXPR_EQUAL, [_to_source(source)]))
     if not parts:
         return None
     if len(parts) == 1:
@@ -239,10 +291,24 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "matched set.\n\n"
             "Filter values use natural OT vocabulary:\n"
             "  • severity_at_least: one of 'info', 'low', 'medium', "
-            "'high', 'critical'\n"
+            "'high', 'critical' — the static, CVSS-derived band\n"
+            "  • vpr_at_least: a numeric VPR (Vulnerability Priority "
+            "Rating) floor, e.g. 7.0 — Tenable's continuous 0.1-10.0 "
+            "daily-recomputed threat-priority score, independent of "
+            "severity. Applied after each page is fetched (Tenable's "
+            "API doesn't support server-side VPR thresholds), so a "
+            "given page may return fewer than `limit` results — or "
+            "none — while later pages still hold matches; keep paging "
+            "on `has_more` rather than stopping at an empty page. "
+            "`total_count` reflects the other filters only, not this "
+            "one.\n"
             "  • cve: a CVE substring (e.g. 'CVE-2023-25619' or "
             "'CVE-2023' for a year-bucket)\n"
-            "  • family / source: exact-match plugin metadata\n\n"
+            "  • source: which detection engine found it — one of "
+            "'nessus' (active scan), 'nnm' (Nessus Network Monitor, "
+            "passive), 'tot' (Tenable OT's own native/passive "
+            "detection)\n"
+            "  • family: exact-match plugin metadata\n\n"
             "For KEV-only or exploit-available filtering, inspect the "
             "projected flags in the response — those live on plugin "
             "details and aren't filterable server-side."
@@ -254,6 +320,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         site_uuids: list[str] | None = None,
         cve: str | None = None,
         severity_at_least: str | None = None,
+        vpr_at_least: float | None = None,
         family: str | None = None,
         source: str | None = None,
         search: str | None = None,
@@ -270,8 +337,11 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             cve: A CVE identifier or substring.
             severity_at_least: One of "info" / "low" / "medium" /
                 "high" / "critical".
+            vpr_at_least: Minimum VPR score (e.g. 7.0). Filtered
+                client-side per page — see the description above for
+                what that means for `total_count`/`has_more`.
             family: Plugin family (vendor-defined grouping).
-            source: Plugin source (e.g. "Tenable").
+            source: Detection engine — one of "nessus" / "nnm" / "tot".
             search: Single-term, case-insensitive substring across
                 plugin text fields.
             limit: Maximum results per page (default 50, max 500).
@@ -281,6 +351,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 retrieve every matching vulnerability.
         """
         page_size = clamp_page_size(limit)
+        vpr_threshold = _validate_vpr_at_least(vpr_at_least)
         filt = _build_vuln_filter(
             cve=cve,
             severity_at_least=severity_at_least,
@@ -317,6 +388,10 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             vulnerabilities = []
             for node in nodes:
                 vulnerability = project_vuln(node)
+                if vpr_threshold is not None:
+                    vpr_score = vulnerability.get("vpr_score")
+                    if vpr_score is None or float(vpr_score) < vpr_threshold:
+                        continue
                 vulnerability["site_uuid"] = machine_id
                 vulnerability["vulnerability_ref"] = {
                     "site_uuid": machine_id,
@@ -325,7 +400,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 vulnerabilities.append(vulnerability)
             return {
                 "site_uuid": machine_id,
-                "count": len(nodes),
+                "count": len(vulnerabilities),
                 "total_count": block.get("totalCount"),
                 "has_more": bool(page_info.get("hasNextPage")),
                 "end_cursor": page_info.get("endCursor"),
