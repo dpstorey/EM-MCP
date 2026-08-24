@@ -3,10 +3,16 @@
 
 Detection policies are the rules that fire OT events. Tenable OT's
 `policies` GraphQL query has no server-side filter argument — only
-pagination — so this tool fetches all configured policies (capped at
-`limit`) and applies category / enabled / search filtering
-client-side. Per-asset findings are exposed via `policyFindings`,
-which DOES support a filter expression tree.
+pagination — so `list_detection_policies` applies category / enabled /
+paused / search filtering client-side to each fetched page, same
+constraint (and same fix) as `vulns.py`'s `vpr_at_least`: a single
+server page can come back with fewer client-side matches than `limit`
+purely by chance, so this tool fetches additional pages internally
+(capped at `_MAX_CLIENT_FILTER_PAGES_PER_CALL`) until it has `limit`
+matches or the site's policies are exhausted. Per-asset findings are
+exposed via `policyFindings`, which DOES support a filter expression
+tree — `query_policy_findings` below filters entirely server-side and
+needs no such loop.
 """
 
 from __future__ import annotations
@@ -24,7 +30,12 @@ from ._enums import (
     to_policy_level,
 )
 from ._shared import clamp_page_size, unwrap_nodes
-from ._sites import run_site_read
+from ._sites import resolve_read_site_ids, run_multi_site_read
+
+# Safety cap on internal page-fetches per call for list_detection_policies'
+# client-side filtering — bounds worst-case latency/cost when the filter is
+# very selective against a large policy set (see module docstring).
+_MAX_CLIENT_FILTER_PAGES_PER_CALL = 10
 
 # ----------------------------------------------------------------------
 # GraphQL fragments + queries
@@ -198,10 +209,14 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "`query_policy_findings` for the per-asset hits one policy "
             "is producing.\n\n"
             "Note: Tenable OT's `policies` query supports pagination "
-            "only — the category / enabled / search filters below are "
-            "applied client-side after fetching a page. For large "
-            "deployments, increase `limit` to capture more before "
-            "filtering."
+            "only — the category / enabled / paused / search filters "
+            "below are applied client-side. This tool fetches "
+            "additional pages internally as needed to try to return "
+            "`limit` matches in one call. If `has_more_in_tenable` "
+            "still comes back true alongside fewer than `limit` "
+            "results, the filter is unusually selective — call again "
+            "with the returned `end_cursor` as `after` to keep "
+            "collecting."
         ),
     )
     async def list_detection_policies(
@@ -213,6 +228,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         paused: bool | None = None,
         search: str | None = None,
         limit: int = 200,
+        after: str | None = None,
+        after_by_site: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """List detection policies (client-side filtered).
 
@@ -227,10 +244,19 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 non-paused; None (default) returns both.
             search: Substring (case-insensitive) on policy title.
             limit: Maximum policies to return (default 200, max 500).
+            after: Opaque page cursor. Omit for the first page; to
+                continue, pass the `end_cursor` value from the previous
+                response. Keep paging while `has_more_in_tenable` is
+                true to retrieve every matching policy.
+            after_by_site: Per-site cursors for a multi-site query,
+                keyed by site UUID. Cannot be combined with `after`.
         """
         page_size = clamp_page_size(limit, default=200)
+        if after and after_by_site:
+            raise ValueError("after cannot be combined with after_by_site")
 
-        # Client-side filter pass.
+        # Client-side filter pass — Tenable's `policies` query has no
+        # server-side filter argument at all.
         def keep(p: dict[str, Any]) -> bool:
             if category and (p.get("category") != category):
                 return False
@@ -248,17 +274,54 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                     return False
             return True
 
+        site_ids = await resolve_read_site_ids(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+        )
+
         async def query_site(machine_id: str) -> dict[str, Any]:
-            data = await client.query(
-                _QUERY_POLICIES,
-                variables={"pageSize": page_size},
-                icp_machine_id=machine_id,
-            )
-            block = data.get("policies") or {}
-            nodes = block.get("nodes") or []
-            page_info = block.get("pageInfo") or {}
-            projected = [_project_policy(node) for node in nodes]
-            filtered = [policy for policy in projected if keep(policy)]
+            site_variables: dict[str, Any] = {"pageSize": page_size}
+            end_cursor = after if len(site_ids) == 1 else (after_by_site or {}).get(machine_id)
+
+            filtered: list[dict[str, Any]] = []
+            total_count_unfiltered = None
+            server_has_more = False
+            page_returned = 0
+            pages_fetched = 0
+
+            while True:
+                if end_cursor:
+                    site_variables["after"] = end_cursor
+                else:
+                    site_variables.pop("after", None)
+                data = await client.query(
+                    _QUERY_POLICIES,
+                    variables=site_variables,
+                    icp_machine_id=machine_id,
+                )
+                block = data.get("policies") or {}
+                nodes = block.get("nodes") or []
+                page_info = block.get("pageInfo") or {}
+                total_count_unfiltered = block.get("totalCount")
+                end_cursor = page_info.get("endCursor")
+                server_has_more = bool(page_info.get("hasNextPage"))
+                pages_fetched += 1
+                page_returned += len(nodes)
+
+                for node in nodes:
+                    policy = _project_policy(node)
+                    if keep(policy):
+                        filtered.append(policy)
+
+                if len(filtered) >= page_size:
+                    break
+                if not server_has_more:
+                    break
+                if pages_fetched >= _MAX_CLIENT_FILTER_PAGES_PER_CALL:
+                    break
+
             for policy in filtered:
                 policy["site_uuid"] = machine_id
                 policy["policy_ref"] = {
@@ -268,19 +331,16 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             return {
                 "site_uuid": machine_id,
                 "count": len(filtered),
-                "total_count_unfiltered": block.get("totalCount"),
-                "page_returned": len(projected),
-                "has_more_in_tenable": bool(page_info.get("hasNextPage")),
+                "total_count_unfiltered": total_count_unfiltered,
+                "page_returned": page_returned,
+                "has_more_in_tenable": server_has_more,
+                "end_cursor": end_cursor,
                 "policies": filtered,
             }
 
-        return await run_site_read(
-            client,
-            site_uuid=site_uuid,
-            site_name=site_name,
-            site_uuids=site_uuids,
-            worker=query_site,
-        )
+        if len(site_ids) == 1:
+            return await query_site(site_ids[0])
+        return await run_multi_site_read(site_ids, query_site)
 
     @mcp.tool(
         title="Query policy findings",
@@ -293,6 +353,12 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "Each finding has firstHitTime / lastHitTime, activeHits / "
             "resolvedHits, status, and joined source / destination "
             "assets.\n\n"
+            "`total_count` is the full number of findings matching the "
+            "filter, independent of page size. When the match exceeds "
+            "one page the response sets `has_more: true` and returns "
+            "an `end_cursor`; pass that as `after` to fetch the next "
+            "page, repeating until `has_more` is false to walk the "
+            "entire matched set.\n\n"
             "Filter values use natural OT vocabulary:\n"
             "  • severity_at_least: one of 'none', 'low', 'medium', 'high'\n"
             "  • status: a FindingStatus value (e.g. 'Open', 'Resolved')\n"
@@ -312,6 +378,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         plugin_id: str | None = None,
         search: str | None = None,
         limit: int = 100,
+        after: str | None = None,
+        after_by_site: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Filter policy findings.
 
@@ -327,13 +395,21 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             plugin_id: Equal-match on the firing plugin id.
             search: Single-term, case-insensitive substring across
                 finding text fields.
-            limit: Maximum results (default 100, max 500).
+            limit: Maximum results per page (default 100, max 500).
+            after: Opaque page cursor. Omit for the first page; to
+                continue, pass the `end_cursor` value from the previous
+                response. Keep paging while `has_more` is true to
+                retrieve every matching finding.
+            after_by_site: Per-site cursors for a multi-site query,
+                keyed by site UUID. Cannot be combined with `after`.
 
         Note: numeric-floor filters on `activeHits` aren't supported by
         Tenable's GraphQL — fetch results and filter client-side on
         the projected `active_hits` field.
         """
         page_size = clamp_page_size(limit, default=100)
+        if after and after_by_site:
+            raise ValueError("after cannot be combined with after_by_site")
         parts: list[dict] = []
         if policy_id:
             parts.append(expr("policyId", EXPR_EQUAL, [policy_id]))
@@ -357,10 +433,21 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         if search:
             variables["search"] = search
 
+        site_ids = await resolve_read_site_ids(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+        )
+
         async def query_site(machine_id: str) -> dict[str, Any]:
+            site_variables = dict(variables)
+            cursor = after if len(site_ids) == 1 else (after_by_site or {}).get(machine_id)
+            if cursor:
+                site_variables["after"] = cursor
             data = await client.query(
                 _QUERY_POLICY_FINDINGS,
-                variables=variables,
+                variables=site_variables,
                 icp_machine_id=machine_id,
             )
             block = data.get("policyFindings") or {}
@@ -374,13 +461,10 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 "count": len(nodes),
                 "total_count": block.get("totalCount"),
                 "has_more": bool(page_info.get("hasNextPage")),
+                "end_cursor": page_info.get("endCursor"),
                 "findings": findings,
             }
 
-        return await run_site_read(
-            client,
-            site_uuid=site_uuid,
-            site_name=site_name,
-            site_uuids=site_uuids,
-            worker=query_site,
-        )
+        if len(site_ids) == 1:
+            return await query_site(site_ids[0])
+        return await run_multi_site_read(site_ids, query_site)

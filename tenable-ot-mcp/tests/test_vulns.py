@@ -215,6 +215,71 @@ async def test_query_vulnerabilities_without_vpr_at_least_returns_everything() -
     assert result["count"] == 2
 
 
+async def test_query_vulnerabilities_vpr_filter_fetches_more_pages_to_fill_limit() -> None:
+    # Regression for a real observed failure: a "top 20" request with
+    # vpr_at_least got back only 9 results from a single server page,
+    # even though has_more was true and more qualifying rows existed on
+    # later pages — the calling LLM didn't reliably keep paging itself.
+    # query_vulnerabilities must now do that internally.
+    client = FakeClient(
+        [
+            {
+                "plugins": {
+                    "nodes": [_plugin_node("1", 8.0), _plugin_node("2", 1.0)],
+                    "totalCount": 4,
+                    "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+                }
+            },
+            {
+                "plugins": {
+                    "nodes": [_plugin_node("3", 9.0), _plugin_node("4", 2.0)],
+                    "totalCount": 4,
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            },
+        ]
+    )
+    mcp = FakeMCP()
+    register_read_tools(mcp, client, None)  # type: ignore[arg-type]
+
+    result = await mcp.tools["query_vulnerabilities"](site_uuid="site-a", vpr_at_least=7.0, limit=2)
+
+    assert len(client.query_calls) == 2
+    assert client.query_calls[1]["variables"]["after"] == "cursor-1"
+    assert [v["plugin_id"] for v in result["vulnerabilities"]] == ["1", "3"]
+    assert result["count"] == 2
+    assert result["total_count"] == 4
+    assert result["has_more"] is False
+
+
+async def test_query_vulnerabilities_vpr_filter_respects_page_cap() -> None:
+    from tenable_ot_mcp.tools.vulns import _MAX_VPR_PAGES_PER_CALL
+
+    responses = [
+        {
+            "plugins": {
+                "nodes": [_plugin_node(str(i), 1.0)],  # never qualifies (< 7.0)
+                "totalCount": 999,
+                "pageInfo": {"hasNextPage": True, "endCursor": f"cursor-{i}"},
+            }
+        }
+        for i in range(_MAX_VPR_PAGES_PER_CALL)
+    ]
+    client = FakeClient(responses)
+    mcp = FakeMCP()
+    register_read_tools(mcp, client, None)  # type: ignore[arg-type]
+
+    result = await mcp.tools["query_vulnerabilities"](
+        site_uuid="site-a", vpr_at_least=7.0, limit=100
+    )
+
+    # Stops at the cap rather than looping forever against a near-empty
+    # match rate; has_more stays true so a caller can still page onward.
+    assert len(client.query_calls) == _MAX_VPR_PAGES_PER_CALL
+    assert result["count"] == 0
+    assert result["has_more"] is True
+
+
 async def test_query_vulnerabilities_rejects_bad_vpr_at_least() -> None:
     client = FakeClient([])
     mcp = FakeMCP()

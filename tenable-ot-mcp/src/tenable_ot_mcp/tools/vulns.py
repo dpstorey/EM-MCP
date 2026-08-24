@@ -27,12 +27,21 @@ Filter scope notes (verified live):
   • `query_vulnerabilities`' `vpr_at_least` implements exactly that
     client-side pattern for `vprScore` — don't move it into
     `_build_vuln_filter`/the GraphQL `filter` argument, that reproduces
-    the 500 above. Because the threshold is applied after each page is
-    fetched, `total_count`/`has_more`/`end_cursor` reflect the server's
-    match count for every *other* filter, not the VPR-narrowed subset;
-    callers must keep paging on `has_more` to see every match, and a
-    given page may come back with fewer than `limit` items (or zero)
-    even though later pages still contain qualifying vulnerabilities.
+    the 500 above. A single server page can easily come back with
+    fewer VPR-qualifying rows than `limit` (or zero) purely by chance,
+    even with plenty more qualifying rows on later pages — and in
+    practice, calling LLMs did not reliably notice `has_more` and keep
+    paging to compensate (observed: a "top 20" request silently came
+    back with 9). So when `vpr_at_least` is set, `query_vulnerabilities`
+    fetches additional server pages itself, internally, until it has
+    `limit` matches or the site truly runs out (capped at
+    `_MAX_VPR_PAGES_PER_CALL` page-fetches per call, to bound worst-case
+    latency when the floor is very selective) — see `query_site` below.
+    `total_count`/`has_more`/`end_cursor` still describe the server's
+    pagination over every *other* filter, not the VPR-narrowed subset;
+    if `has_more` comes back true and fewer than `limit` matches were
+    found, the safety cap was hit and a caller wanting more should still
+    page again with the returned `end_cursor`.
   • `kev_only`, `exploit_available`, etc. live on `PluginDetails`,
     NOT in the top-level `PluginField` filter enum — fetch results
     and inspect the projected flags client-side.
@@ -208,6 +217,13 @@ def _validate_vpr_at_least(value: float | int | str | None) -> float | None:
     return threshold
 
 
+# Safety cap on internal page-fetches per call when vpr_at_least is set (see
+# module docstring) — bounds worst-case latency/cost if the floor is very
+# selective against a large candidate set, at the cost of occasionally
+# returning fewer than `limit` matches even though has_more is still true.
+_MAX_VPR_PAGES_PER_CALL = 10
+
+
 # Detection-engine source — natural vocabulary → Tenable's exact casing.
 # Confirmed from the product UI's own `getPluginsGrouped` query traffic
 # (see module docstring), not independent introspection.
@@ -295,11 +311,13 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "  • vpr_at_least: a numeric VPR (Vulnerability Priority "
             "Rating) floor, e.g. 7.0 — Tenable's continuous 0.1-10.0 "
             "daily-recomputed threat-priority score, independent of "
-            "severity. Applied after each page is fetched (Tenable's "
-            "API doesn't support server-side VPR thresholds), so a "
-            "given page may return fewer than `limit` results — or "
-            "none — while later pages still hold matches; keep paging "
-            "on `has_more` rather than stopping at an empty page. "
+            "severity. Applied client-side (Tenable's API doesn't "
+            "support server-side VPR thresholds); this tool fetches "
+            "additional pages internally as needed to try to return "
+            "`limit` matches in one call. If `has_more` still comes "
+            "back true alongside fewer than `limit` results, the VPR "
+            "floor is unusually selective — call again with the "
+            "returned `end_cursor` as `after` to keep collecting. "
             "`total_count` reflects the other filters only, not this "
             "one.\n"
             "  • cve: a CVE substring (e.g. 'CVE-2023-25619' or "
@@ -374,36 +392,61 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
 
         async def query_site(machine_id: str) -> dict[str, Any]:
             site_variables = dict(variables)
-            cursor = after if len(site_ids) == 1 else (after_by_site or {}).get(machine_id)
-            if cursor:
-                site_variables["after"] = cursor
-            data = await client.query(
-                _QUERY_VULNS,
-                variables=site_variables,
-                icp_machine_id=machine_id,
-            )
-            block = data.get("plugins") or {}
-            nodes = block.get("nodes") or []
-            page_info = block.get("pageInfo") or {}
-            vulnerabilities = []
-            for node in nodes:
-                vulnerability = project_vuln(node)
-                if vpr_threshold is not None:
-                    vpr_score = vulnerability.get("vpr_score")
-                    if vpr_score is None or float(vpr_score) < vpr_threshold:
-                        continue
-                vulnerability["site_uuid"] = machine_id
-                vulnerability["vulnerability_ref"] = {
-                    "site_uuid": machine_id,
-                    "plugin_id": vulnerability.get("plugin_id"),
-                }
-                vulnerabilities.append(vulnerability)
+            end_cursor = after if len(site_ids) == 1 else (after_by_site or {}).get(machine_id)
+
+            vulnerabilities: list[dict[str, Any]] = []
+            total_count = None
+            server_has_more = False
+            pages_fetched = 0
+
+            while True:
+                if end_cursor:
+                    site_variables["after"] = end_cursor
+                else:
+                    site_variables.pop("after", None)
+                data = await client.query(
+                    _QUERY_VULNS,
+                    variables=site_variables,
+                    icp_machine_id=machine_id,
+                )
+                block = data.get("plugins") or {}
+                nodes = block.get("nodes") or []
+                page_info = block.get("pageInfo") or {}
+                total_count = block.get("totalCount")
+                end_cursor = page_info.get("endCursor")
+                server_has_more = bool(page_info.get("hasNextPage"))
+                pages_fetched += 1
+
+                for node in nodes:
+                    vulnerability = project_vuln(node)
+                    if vpr_threshold is not None:
+                        vpr_score = vulnerability.get("vpr_score")
+                        if vpr_score is None or float(vpr_score) < vpr_threshold:
+                            continue
+                    vulnerability["site_uuid"] = machine_id
+                    vulnerability["vulnerability_ref"] = {
+                        "site_uuid": machine_id,
+                        "plugin_id": vulnerability.get("plugin_id"),
+                    }
+                    vulnerabilities.append(vulnerability)
+
+                if vpr_threshold is None:
+                    # No client-side filter in play — one server page per
+                    # call, exactly as before this loop existed.
+                    break
+                if len(vulnerabilities) >= page_size:
+                    break
+                if not server_has_more:
+                    break
+                if pages_fetched >= _MAX_VPR_PAGES_PER_CALL:
+                    break
+
             return {
                 "site_uuid": machine_id,
                 "count": len(vulnerabilities),
-                "total_count": block.get("totalCount"),
-                "has_more": bool(page_info.get("hasNextPage")),
-                "end_cursor": page_info.get("endCursor"),
+                "total_count": total_count,
+                "has_more": server_has_more,
+                "end_cursor": end_cursor,
                 "vulnerabilities": vulnerabilities,
             }
 

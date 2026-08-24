@@ -59,8 +59,8 @@ recorded in `/data/audit.jsonl`.
 
 | Tool | One-line purpose |
 |---|---|
-| `list_detection_policies` | List configured detection policies with category, enabled flag, paused flag, level, fired-event counts (last 24h / 7d / 30d). |
-| `query_policy_findings` | Per-asset findings (the rows of `policy × asset × hit-count`) filtered by policy / status / severity / time / MITRE technique / plugin id. |
+| `list_detection_policies` | List configured detection policies with category, enabled flag, paused flag, level, fired-event counts (last 24h / 7d / 30d). Category/enabled/paused/search filter client-side (Tenable's `policies` query has no server-side filter); the tool fetches additional pages internally to try to fill `limit`, capped at 10 page-fetches per call. |
+| `query_policy_findings` | Per-asset findings (the rows of `policy × asset × hit-count`) filtered by policy / status / severity / time / MITRE technique / plugin id — all server-side. Supports `after`/`after_by_site` pagination. |
 
 ### Network topology
 
