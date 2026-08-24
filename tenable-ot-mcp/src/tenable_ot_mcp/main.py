@@ -15,7 +15,7 @@ BANNER = r"""
    ╔══════════════════════════════════════════════╗
    ║  Tenable OT MCP Server                       ║
    ║  Open source · Apache 2.0 · v{version:<16} ║
-   ║  https://gitlab.com/jwalley/tenable-ot-mcp   ║
+   ║  https://github.com/dpstorey/EM-MCP          ║
    ╚══════════════════════════════════════════════╝
 """
 
