@@ -1,0 +1,12 @@
+services:
+  workspace-shell:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: workspace-shell:latest
+    container_name: workspace-shell
+    restart: unless-stopped
+    volumes:
+      - /home/dstorey/llm-scratch:/llm-scratch
+    ports:
+      - "8000:8000"
