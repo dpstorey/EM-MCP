@@ -29,6 +29,9 @@ Use the prompt in `prompt/AGENT.md`
 ### Tool List
 A categorized tool list document is available in file `tot-mcp-tool-list.md`.
 
+### Example Session
+This is an example session with a test Tenable OT system using demonstration data and a locally executing LLM (HCompany's Holo-35B-A3B) running on 2 Nvidia A6000's - it will give you a good sense of the capabilities of the MCP functionality.
+
 ### Recent Updates (v0.5.0)
 
 - Updated to upstream v0.4.5 baseline
