@@ -39,4 +39,3 @@ EXAMPLE_SESSION.md is a transcript of an example session with a Tenable OT syste
 - Version synchronization with upstream releases
 
 
-# EM-PRINT
