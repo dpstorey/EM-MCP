@@ -30,7 +30,7 @@ from ._enums import (
     to_policy_level,
 )
 from ._shared import clamp_page_size, unwrap_nodes
-from ._sites import resolve_read_site_ids, run_multi_site_read
+from ._sites import resolve_read_site_ids, run_multi_site_read, run_site_read
 
 # Safety cap on internal page-fetches per call for list_detection_policies'
 # client-side filtering — bounds worst-case latency/cost when the filter is
@@ -96,6 +96,20 @@ _QUERY_POLICY_FINDINGS = (
     "search: $search, sort: $sort) { "
     "pageInfo { hasNextPage endCursor } totalCount "
     "nodes { " + _FINDING_FIELDS + " } "
+    "} "
+    "}"
+)
+
+
+_QUERY_POLICY_EXCLUSIONS = (
+    "query Q($policyId: ID!) { "
+    "policy(id: $policyId) { "
+    "id title exclusions { "
+    "nodes { id type comment created createdBy "
+    "... on ActivityExclusion { srcIp dstIp } "
+    "... on AssetExclusion { assets { nodes { id name type } } } "
+    "} "
+    "} "
     "} "
     "}"
 )
@@ -468,3 +482,49 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         if len(site_ids) == 1:
             return await query_site(site_ids[0])
         return await run_multi_site_read(site_ids, query_site)
+
+    @mcp.tool(
+        title="List policy exclusions",
+        description="Returns the active exclusions (tuning rules) for a specific detection policy.",
+    )
+    async def list_policy_exclusions(
+        policy_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """List active tuning exclusions for a policy.
+
+        Args:
+            policy_id: The ID of the policy to query.
+        """
+        if not policy_id:
+            raise ValueError("policy_id is required")
+
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            data = await client.query(
+                _QUERY_POLICY_EXCLUSIONS,
+                variables={"policyId": policy_id},
+                icp_machine_id=machine_id,
+            )
+            policy_data = data.get("policy") or {}
+            exclusions_block = policy_data.get("exclusions") or {}
+            nodes = exclusions_block.get("nodes") or []
+            for node in nodes:
+                if "assets" in node and isinstance(node["assets"], dict):
+                    node["assets"] = unwrap_nodes(node["assets"])
+            return {
+                "site_uuid": machine_id,
+                "policy_id": policy_data.get("id"),
+                "policy_title": policy_data.get("title"),
+                "count": len(nodes),
+                "exclusions": nodes,
+            }
+
+        return await run_site_read(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            worker=query_site,
+        )

@@ -145,6 +145,32 @@ mutation M($ids: [ID!]!) {
 }
 """
 
+_M_NEW_ACTIVITY_EXCLUSION = """
+mutation M($comment: String, $dstAssets: [ID!], $dstIp: String, $policyId: ID!, $srcAssets: [ID!], $srcIp: String) {
+  newActivityExclusion(comment: $comment, dstAssets: $dstAssets, dstIp: $dstIp, policyId: $policyId, srcAssets: $srcAssets, srcIp: $srcIp) {
+    id
+    __typename
+  }
+}
+"""
+
+_M_NEW_CONVERSATION_EXCLUSION = """
+mutation M($comment: String, $dstAssets: [ID!], $dstIp: String, $policyId: ID!, $srcAssets: [ID!], $srcIp: String) {
+  newConversationExclusion(comment: $comment, dstAssets: $dstAssets, dstIp: $dstIp, policyId: $policyId, srcAssets: $srcAssets, srcIp: $srcIp) {
+    id
+    __typename
+  }
+}
+"""
+
+_M_DELETE_EXCLUSION = """
+mutation M($policyId: ID!, $exclusionId: String!) {
+  deleteExclusion(policyId: $policyId, exclusionId: $exclusionId) {
+    id
+  }
+}
+"""
+
 # Asset property edits — change name / type / location / description /
 # purdue / criticality / customFields. Pass `_RemoveUserDefinedValue`
 # on any enum field to revert to "as Tenable discovered". Free-text
@@ -1211,6 +1237,121 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             "archive_detection_policies",
             _M_ARCHIVE_POLICIES,
             {"ids": list(policy_ids)},
+            dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
+
+    @mcp.tool(
+        title="Create activity exclusion",
+        description=(
+            "Add a tuning exclusion for a network/activity policy (e.g., "
+            "'Connections TO external network'). This prevents the policy "
+            "from firing for matching traffic.\n\n"
+            "WRITE. Defaults to dry_run."
+        ),
+    )
+    async def create_activity_exclusion(
+        policy_id: str,
+        src_ip: str | None = None,
+        dst_ip: str | None = None,
+        comment: str | None = None,
+        src_assets: list[str] | None = None,
+        dst_assets: list[str] | None = None,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        if not policy_id:
+            raise ValueError("policy_id is required")
+        variables = {
+            "policyId": policy_id,
+            "srcIp": src_ip,
+            "dstIp": dst_ip,
+            "comment": comment,
+            "srcAssets": src_assets or [],
+            "dstAssets": dst_assets or [],
+        }
+        return await _execute_write(
+            client,
+            audit,
+            "create_activity_exclusion",
+            _M_NEW_ACTIVITY_EXCLUSION,
+            variables,
+            dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
+
+    @mcp.tool(
+        title="Create conversation exclusion",
+        description=(
+            "Add a tuning exclusion for an unauthorized conversation policy (e.g., "
+            "'HTTP Communications to Controllers'). This prevents the policy "
+            "from firing for matching traffic.\n\n"
+            "WRITE. Defaults to dry_run."
+        ),
+    )
+    async def create_conversation_exclusion(
+        policy_id: str,
+        src_ip: str | None = None,
+        dst_ip: str | None = None,
+        comment: str | None = None,
+        src_assets: list[str] | None = None,
+        dst_assets: list[str] | None = None,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        if not policy_id:
+            raise ValueError("policy_id is required")
+        variables = {
+            "policyId": policy_id,
+            "srcIp": src_ip,
+            "dstIp": dst_ip,
+            "comment": comment,
+            "srcAssets": src_assets or [],
+            "dstAssets": dst_assets or [],
+        }
+        return await _execute_write(
+            client,
+            audit,
+            "create_conversation_exclusion",
+            _M_NEW_CONVERSATION_EXCLUSION,
+            variables,
+            dry_run,
+            site_uuid=site_uuid,
+            site_name=site_name,
+        )
+
+    @mcp.tool(
+        title="Delete policy exclusion",
+        description=(
+            "Remove a tuning exclusion from a detection policy. The policy "
+            "will resume firing events for the traffic that was previously "
+            "excluded.\n\n"
+            "WRITE. Defaults to dry_run."
+        ),
+    )
+    async def delete_exclusion(
+        policy_id: str,
+        exclusion_id: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        if not policy_id or not exclusion_id:
+            raise ValueError("policy_id and exclusion_id are required")
+        variables = {
+            "policyId": policy_id,
+            "exclusionId": exclusion_id,
+        }
+        return await _execute_write(
+            client,
+            audit,
+            "delete_exclusion",
+            _M_DELETE_EXCLUSION,
+            variables,
             dry_run,
             site_uuid=site_uuid,
             site_name=site_name,
