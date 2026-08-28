@@ -222,16 +222,63 @@ risk** for that dimension.
   `risk.total_risk`.
 - Render missing or invalid grades as `-`.
 
+### Fatality flag
+
+Any asset whose resolved grade maps to a Scoring matrix cell whose text
+contains the word "fatality" or "fatalities" (case-insensitive) must be
+flagged, not just tabulated like any other grade. **Today that is BOTH of
+the following, independently — check each asset against both, not just
+one:**
+
+- **Safety (S) grade D** — "Very severe, fatality"
+- **Safety (S) grade E** — "Disaster, multiple fatalities"
+
+An asset is flagged if its S grade is D, **or** if its S grade is E — these
+are two separate trigger conditions, not "D and then also somehow E."
+Grade E is not a lesser case that D already covers; check for it
+explicitly, the same as D. This is based on the matrix text above, not a
+hardcoded letter — if the Scoring matrix is ever edited, re-check which
+cells contain the word rather than assuming it's always S:D/S:E.
+
+When a fatality-level grade is present:
+
+- In the Asset summary table, prefix that asset's `Asset` cell with
+  `⚠️ FATALITY RISK — ` (e.g. `⚠️ FATALITY RISK — REACTOR`), in addition to
+  its normal S column grade.
+- In a Detailed asset profile, call out the specific dimension and grade
+  under "RAISE detail" as a fatality-level safety risk requiring immediate
+  attention, even if the user didn't ask for a risk narrative.
+- If any asset in a multi-asset result has a fatality-level grade, say so
+  plainly in your response text — before or after the table, not only
+  inside a cell — so it can't be missed by skimming a long table.
+
 ## Output
 
 ### Asset summary
 
+The header row below is fixed. Reproduce it exactly — same 11 columns, same
+names, same order, same left-to-right position for R, A, I, S, E. Never
+rename, merge, reorder, drop, or add a column.
+
 ```markdown
 | Site | Asset | IP Address | Asset Type | Numerical Risk Score | Description | R | A | I | S | E |
 |---|---|---|---|---:|---|:---:|:---:|:---:|:---:|:---:|
+| LAB | ⚠️ FATALITY RISK — REACTOR | 10.253.10.244 | PLC | 52.4 | - | A | D | C | D | E |
+| LAB | ⚠️ FATALITY RISK — PMC-01 | 10.253.10.252 | Controller | 33.5 | - | B | B | B | E | A |
+| LAB | I/O #204 | 10.253.10.10 | I/O | 34.0 | - | - | - | - | - | - |
 ```
 
 Map returned name, IPs, type, `risk.total_risk` to one decimal, description or `-`, and independent RAISE grades.
+
+Rules:
+
+- R, A, I, S, E are five separate columns in the header row above, each holding exactly one character (a letter grade or `-`). There is no sixth "RAISE" column and no merged column.
+- Do not combine the five grades into one cell or one column under any label — not `"R:B, A:B, I:B, S:E, E:A"`, not `"B/B/B/A/E"`, not a column titled `"RAISE Grades"` or `"RAISE Grades (R/A/I/S/E)"` or any other combined phrasing. If you find yourself writing a slash, colon, or comma between grade letters, stop — that means they were merged into one column and need to be split back into the five columns above.
+- A missing or ungraded dimension is exactly `-` (one hyphen character) in its own R/A/I/S/E cell — never "Not available", "N/A", "None", "Unknown", or any other word.
+- Apply this per cell, not per row: an asset with some dimensions graded and others not shows real grades and `-` side by side in the same row, exactly as in the example above.
+- Do not add columns that are not in the header row (e.g. `Vendor`), and do not drop `Site` or `Description` to make room for one.
+- Preserve `Asset Type` exactly as returned by the tool (e.g. `PLC`, `I/O`, `HMI`) — do not re-title-case it into `Plc`, `Io`, or `Hmi`.
+- `⚠️ FATALITY RISK — ` prefixed to `REACTOR`'s and `PMC-01`'s `Asset` cells above is intentional, not an error — see "Fatality flag" under RAISE. Note they trigger on *different* grades (`REACTOR` on S:D, `PMC-01` on S:E) — both grades flag independently, side by side in the same table. It applies only to the `Asset` column, alongside the normal RAISE grade columns, never in place of them.
 
 Do not wrap the completed table in a code fence or artifact container.
 

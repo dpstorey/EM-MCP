@@ -24,7 +24,7 @@ Verify
 docker compose ps tenable-ot
 docker compose logs --tail=100 tenable-ot
 ```
-Use the prompt in `prompt/AGENT.md` 
+Suggested agent prompts are available in`prompt/` Some Smaller MOE models require more re-inforcement.
 
 ### Tool List
 A categorized tool list document is available in file `tot-mcp-tool-list.md`.
