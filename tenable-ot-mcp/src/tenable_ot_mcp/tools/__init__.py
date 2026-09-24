@@ -21,6 +21,7 @@ def register_read_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> Non
     """Register all read-only tools."""
     from . import (
         assets,
+        attack_vector,
         correlation,
         em,
         events,
@@ -48,6 +49,7 @@ def register_read_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> Non
     groups.register_read_tools(mcp, client, audit)
     status.register_read_tools(mcp, client, audit)
     em.register_read_tools(mcp, client, audit)
+    attack_vector.register_read_tools(mcp, client, audit)
 
 
 def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> None:
