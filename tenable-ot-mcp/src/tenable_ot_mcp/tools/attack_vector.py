@@ -573,51 +573,17 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     @mcp.tool(
         title="Batch-generate and analyze attack vectors (Attackers View)",
         description=(
-            "Drives Tenable OT/EM's own server-side attack-vector "
-            "computation (the UI's Attack Vectors tab 'Generate' action) "
-            "across every asset in one or more CIDRs, then analyzes the "
-            "results as a fleet rather than one asset at a time.\n\n"
-            "For each asset in scope: (1) triggers "
-            "`generateAttackVector` — an async job that walks recorded "
-            "conversation data from an entry point (or an automatically "
-            "chosen one) to that asset, weighted by risk; (2) polls the "
-            "job to completion; (3) on success, fetches the enriched "
-            "path (named/typed/risk-scored assets at every hop, not "
-            "bare ids).\n\n"
-            "A `Failure` (most commonly 'asset not accessible - no "
-            "conversations') is not an error to retry — it is an "
-            "accurate answer that the asset has no recorded "
-            "communications to build a path from right now, and won't "
-            "change until real traffic is later recorded for it. This "
-            "tool never auto-retries a Failure. Instead it tracks a "
-            "streak of consecutive no-path-found assets; once that "
-            "streak reaches `stop_on_streak`, it stops immediately — "
-            "without touching the rest of the pool — and returns "
-            "`remaining_asset_ids` plus a `paused_reason`. Surface this "
-            "to the user and ask whether to continue (call again with "
-            "the same `cidrs` plus `offset=next_offset` and "
-            "`force_through=true` — never retype asset ids) "
-            "or stop here; do not decide silently either way. A "
-            "genuine transport/API error (as opposed to a job Failure) "
-            "instead stops the batch after `DEFAULT_CONSECUTIVE_ERROR_LIMIT` "
-            "consecutive occurrences, since that signals a systemic "
-            "problem, not per-asset data.\n\n"
-            "Returns per-asset outcomes bucketed as `path_found` / "
-            "`no_path_found` / `timeout` / `error`, plus a `summary` "
-            "with fleet-level synthesis: `chokepoints` (intermediate "
-            "assets that recur across multiple different targets' "
-            "paths — the actual high-value pivot points a single-asset "
-            "view can't reveal), `riskiest_targets`, `stalest_paths` "
-            "(paths whose supporting conversation data is oldest — "
-            "likely theoretical rather than currently live), and "
-            "external-network / backplane exposure counts.\n\n"
-            "By default the result also carries `mermaid`: a ready-made, "
-            "syntactically valid Mermaid `flowchart LR` of every "
-            "`path_found` (one node per asset, labelled edges, "
-            "chokepoints and Safety-grade D/E assets highlighted). "
-            "Output it verbatim; do not redraw it. Pass "
-            "`include_diagram=false` when no diagram is wanted — it "
-            "saves tokens and one Safety-grade lookup per asset."
+            "Batch attack-path analysis using Tenable OT/EM's own server-side "
+            "attack-vector computation (slow: one job per asset). Scope with "
+            "`cidrs` (preferred) or `asset_ids`, plus a site selector.\n\n"
+            "Returns per-asset `path_found` / `no_path_found` / `timeouts` / "
+            "`errors`, a fleet `summary` (chokepoints, riskiest_targets, "
+            "stalest_paths, exposure counts) and a ready-made `mermaid` "
+            "diagram: output it verbatim; pass `include_diagram=false` to omit it.\n\n"
+            "`no_path_found` (no recorded conversations) is a final answer: "
+            "never retry it. After `stop_on_streak` consecutive no-path assets "
+            "the run sets `paused` (not an error): ask the user, then resume "
+            "with the same `cidrs`, `offset=next_offset` and `force_through=true`."
         ),
     )
     async def get_attackers_view(
@@ -634,44 +600,22 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         site_name: str | None = None,
         site_uuids: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Batch-generate and analyze attack vectors across a CIDR-scoped
-        asset pool.
+        """Batch attack-path analysis for a CIDR-scoped or explicit asset pool.
 
         Args:
-            cidrs: One or more CIDRs (e.g. '10.253.10.0/24') defining the
-                target asset pool. Ignored if `asset_ids` is given.
-            asset_ids: Explicit asset ids to process instead of resolving
-                `cidrs`. Ids must be copied exactly. To resume a paused
-                run prefer the same `cidrs` plus `offset=next_offset`,
-                which avoids retyping ids.
-            offset: Skip this many assets from the start of the pool
-                (the resolved `cidrs` pool, or the `asset_ids` list)
-                before processing. Resume a paused run with the same
-                `cidrs`/`asset_ids` and `offset=next_offset` from the
-                previous response (plus `force_through=true`). Pool order
-                is the server's default asset order.
-            entry_point: Asset id (recommended — from `query_assets`), or
-                a best-effort exact name / IP, to use as the attack
-                path's source. Omit to let the server select
-                automatically (matches the UI's "Select Source
-                Automatically").
-            max_hops: Maximum path length Tenable will search (its
-                `constraints.maxLength`). Default 5, matching the UI.
-            max_assets: Safety cap on how many assets this call will
-                process — each asset costs a mutation, one or more job
-                polls, and an enriched read. Default 25.
-            stop_on_streak: Stop early after this many consecutive
-                `no_path_found` results, returning what's done so far
-                plus `remaining_asset_ids`. 0 disables early-stop for an
-                intentional full unattended sweep.
-            force_through: Set true (typically when resuming with
-                `asset_ids`) to disable the streak-based early-stop for
-                this call.
-            include_diagram: Default true. Adds `mermaid` (ready-made
-                attack-path diagram, see tool description) to each
-                site's result. Set false when no diagram is needed.
-            site_uuid / site_name / site_uuids: Site selector(s), same
-                convention as every other tool in this server.
+            cidrs: CIDRs defining the asset pool (ignored if `asset_ids` given).
+            asset_ids: Explicit ids, copied exactly. To resume, prefer the
+                same `cidrs` plus `offset`.
+            offset: Skip this many pool assets first; resume with the
+                previous result's `next_offset` (plus `force_through=true`).
+            entry_point: Source asset id (or exact name/IP). Omit for automatic.
+            max_hops: Maximum path length. Default 5.
+            max_assets: Cap on assets processed per call. Default 25.
+            stop_on_streak: Pause after this many consecutive `no_path_found`
+                (0 disables).
+            force_through: Disable the streak pause for this call.
+            include_diagram: Default true; adds `mermaid`. False omits it.
+            site_uuid / site_name / site_uuids: Site selector(s).
         """
         if not asset_ids and not cidrs:
             raise ValueError("provide either `cidrs` or `asset_ids`")
