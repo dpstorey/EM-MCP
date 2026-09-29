@@ -57,10 +57,11 @@ always-apply: false
    conversations") is retrieved fact, not a failure — report it the same
    way you'd report zero events found. **Never** omit, soften, or retry
    it within the same turn; it will not change without new live traffic.
-5. Report `summary.chokepoints`, `summary.riskiest_targets`, and
+5. Quote every count and figure exactly from the result (`path_found`, `no_path_found`, `summary.*`); never recount or estimate them.
+6. Report `summary.chokepoints`, `summary.riskiest_targets`, and
    `summary.stalest_paths` when present — that fleet-level synthesis is
    the point of this tool. Don't discard it for a flat list of raw paths.
-6. Your reply is not complete until it contains, in this order: (a) the
+7. Your reply is not complete until it contains, in this order: (a) the
    counts / paused report, (b) the Asset Summary table, (c) the diagram
    from "Attack Path Diagram" below.
 

@@ -127,3 +127,8 @@ def test_bare_ip_endpoint_uses_ip_label():
     bare = {"id": "10.1.1.1", "name": None, "is_asset": False, "ips": ["10.1.1.1"]}
     out = build_attack_mermaid([{"asset_id": "x", "attack_vector": {"hops": [_hop(None, bare)]}}])
     assert "[10.1.1.1]" in out
+
+
+def test_hash_in_io_name_is_entity_encoded():
+    out = build_attack_mermaid([{"asset_id": "x", "attack_vector": {"hops": [_hop(None, _ep("x", "I/O #204"))]}}])
+    assert "[I/O #35;204]" in out

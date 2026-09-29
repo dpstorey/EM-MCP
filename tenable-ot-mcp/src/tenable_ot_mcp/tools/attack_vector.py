@@ -549,7 +549,8 @@ async def _diagram_fields(
 
     notes = [
         "Output `mermaid` verbatim in a ```mermaid code fence. Do not redraw or edit it. "
-        "It contains no double quotes: copy it exactly as decoded, with no backslashes."
+        "It contains no double quotes: copy it exactly as decoded, with no backslashes. "
+        "Keep sequences like `#35;` exactly as written (they display as #); copy names character for character."
     ]
     if paused:
         notes.append("Run is paused: this diagram covers only the paths found so far in this call.")

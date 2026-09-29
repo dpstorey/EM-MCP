@@ -212,10 +212,18 @@ class TenableClient:
             raise TenableError(f"Transport error talking to Tenable OT/EM: {e}") from e
 
         if resp.status_code >= 400:
+            site_hint = ""
+            if resp.status_code == 404 and endpoint != f"{self.base_url}/graphql":
+                site_hint = (
+                    " The site id in the URL is not a paired site (a wrong or "
+                    "hand-typed UUID). Retry with `site_name` (the exact name "
+                    "from `list_paired_icps`, e.g. 'London') instead of a UUID; "
+                    "do not resend the same UUID."
+                )
             raise TenableError(
                 (
                     f"Tenable OT/EM returned HTTP {resp.status_code} "
-                    f"from {endpoint}: {resp.text[:500]}"
+                    f"from {endpoint}: {resp.text[:500]}{site_hint}"
                 ),
                 status=resp.status_code,
             )
