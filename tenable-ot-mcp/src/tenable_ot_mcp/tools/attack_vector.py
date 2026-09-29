@@ -63,7 +63,7 @@ _UUID_RE = re.compile(
 )
 
 DEFAULT_MAX_HOPS = 5
-DEFAULT_MAX_ASSETS = 25
+DEFAULT_MAX_ASSETS = 50
 DEFAULT_STOP_ON_STREAK = 10
 DEFAULT_POLL_INTERVAL_S = 1.5
 DEFAULT_POLL_TIMEOUT_S = 30.0
@@ -462,14 +462,27 @@ def _analyze_batch(path_found: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _paging_fields(offset: int, processed: int, remaining: int) -> dict[str, Any]:
+def _paging_fields(
+    offset: int, processed: int, remaining: int, more: bool = False
+) -> dict[str, Any]:
     """Resume bookkeeping. `next_offset` is where to restart (same `cidrs`
     or `asset_ids`, plus `offset=next_offset`) so the caller never has to
-    retype asset ids; it is None when nothing is left to process."""
-    return {
+    retype asset ids; it is None when nothing is left to process. `more`
+    means the scope holds assets beyond this call's `max_assets` cap, so
+    the result is truncated even though nothing in the batch is pending."""
+    out: dict[str, Any] = {
         "offset": offset,
-        "next_offset": offset + processed if remaining else None,
+        "next_offset": offset + processed if (remaining or more) else None,
     }
+    if more:
+        out["truncated"] = True
+        out["truncated_note"] = (
+            "More assets match than max_assets allowed, so this result is "
+            "incomplete. Call again with the same scope, offset=next_offset "
+            "and force_through=true, or raise max_assets; do not report the "
+            "analysis as complete."
+        )
+    return out
 
 
 # ----------------------------------------------------------------------
@@ -611,7 +624,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 previous result's `next_offset` (plus `force_through=true`).
             entry_point: Source asset id (or exact name/IP). Omit for automatic.
             max_hops: Maximum path length. Default 5.
-            max_assets: Cap on assets processed per call. Default 25.
+            max_assets: Cap on assets processed per call. Default 50; if more match, `truncated` is true and `next_offset` says where to resume.
             stop_on_streak: Pause after this many consecutive `no_path_found`
                 (0 disables).
             force_through: Disable the streak pause for this call.
@@ -631,12 +644,15 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
 
         async def run_for_site(machine_id: str) -> dict[str, Any]:
             if asset_ids:
+                more = len(asset_ids) > offset + max_assets
                 pool = [{"id": aid} for aid in asset_ids[offset : offset + max_assets]]
             else:
+                # Fetch one extra so we can tell whether the cap cut the scope short.
                 pool = await _resolve_asset_pool(
-                    client, machine_id, cidrs=cidrs or [], max_assets=offset + max_assets
+                    client, machine_id, cidrs=cidrs or [], max_assets=offset + max_assets + 1
                 )
-                pool = pool[offset:]
+                more = len(pool) > offset + max_assets
+                pool = pool[offset : offset + max_assets]
             source_id = await _resolve_entry_point(client, machine_id, entry_point)
 
             path_found: list[dict[str, Any]] = []
@@ -726,7 +742,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 "paused": paused_reason is not None,
                 "paused_reason": paused_reason,
                 "remaining_asset_ids": remaining,
-                **_paging_fields(offset, len(processed_ids), len(remaining)),
+                **_paging_fields(offset, len(processed_ids), len(remaining), more),
                 "summary": summary,
                 **diagram,
             }

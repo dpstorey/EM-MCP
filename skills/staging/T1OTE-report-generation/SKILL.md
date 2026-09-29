@@ -17,6 +17,11 @@ skill. If a `submit_report_job` call fails validation (e.g. a missing
 `asset_id`), do not resubmit the same call unchanged — fix the specific
 parameter, or stop and tell the user the error instead of retrying blind.
 
+Module choice: an "asset report" (all assets in a subnet or site) is module
+`asset_inventory`; a "vulnerability findings report" is `vulnerability_findings`.
+`risk_profile` is for ONE asset and needs `asset_id`; do not use it for a fleet.
+Pass `site_name` (never a typed UUID) and `subnet` as returned by the user.
+
 1. Establish the selected site(s) (site selection is handled in the base
    agent instructions — reuse the site already chosen in this conversation).
 2. If unsure which report module fits the request, call `list_report_types`

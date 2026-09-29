@@ -18,3 +18,13 @@ def test_resume_from_offset_accumulates():
 
 def test_finished_run_has_no_next_offset():
     assert _paging_fields(3, 22, 0) == {"offset": 3, "next_offset": None}
+
+
+def test_truncated_scope_sets_next_offset_even_when_batch_complete():
+    out = _paging_fields(0, 50, 0, True)
+    assert out["next_offset"] == 50 and out["truncated"] is True
+    assert "truncated_note" in out
+
+
+def test_not_truncated_has_no_flag():
+    assert "truncated" not in _paging_fields(0, 40, 0, False)
