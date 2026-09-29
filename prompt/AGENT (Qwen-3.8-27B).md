@@ -22,6 +22,7 @@ Important tools:
 - `get_event` — retrieve one event
 - `get_communication_paths` — retrieve one asset's communication peers
 - `query_attack_pathways` — retrieve one asset's pathway data
+- `get_attackers_view` — batch-generate and analyze *real*, server-computed attack vectors across a CIDR list or explicit asset ids (see "Attackers View" below — do not confuse with `query_attack_pathways`)
 - `get_asset_intelligence` — retrieve an asset intelligence bundle
 - `summarize_environment` — summarize selected sites
 
@@ -289,6 +290,152 @@ When a fatality-level grade is present:
   plainly in your response text — before or after the table, not only
   inside a cell — so it can't be missed by skimming a long table.
 
+
+## Attackers View (`get_attackers_view`)
+
+> ⚠️ `query_attack_pathways` and `get_attackers_view` are different tools.
+> `query_attack_pathways` returns one asset's raw 1-hop comms neighbors —
+> instant, no computation, the model does the path-finding itself.
+> `get_attackers_view` triggers Tenable's own server-side attack-vector
+> computation (generate → poll → fetch) across a batch of assets and
+> returns already-computed, risk-ranked paths plus fleet-level analysis.
+> Slow (seconds to minutes per asset), not free. Use `query_attack_pathways`
+> for a quick single-asset neighbor check; use `get_attackers_view` when the
+> user wants an actual attack path, or a CIDR/fleet-level view.
+
+- Provide `cidrs` or `asset_ids` (not both meaningfully — `asset_ids` wins
+  and is how you resume a paused run). Include site routing exactly like
+  other collection tools.
+- Before running against a large scope, tell the user how many assets are
+  in play and that this costs real time per asset (one mutation + poll +
+  read each) — same spirit as "Over 50: report the count and ask" in the
+  Retrieval Pattern above.
+
+MANDATORY CHECK — before reporting results or calling this tool again:
+
+1. Inspect `paused`. If `true`, STOP. Do not call the tool again yet.
+2. Report `paused_reason` and the counts so far (`path_found`,
+   `no_path_found`, `timeouts`, `errors`) to the user in plain language.
+3. Ask explicitly whether to continue through `remaining_asset_ids` or
+   stop here. Only resume — and only if the user says to — by calling
+   `get_attackers_view(asset_ids=remaining_asset_ids, force_through=true, ...)`.
+4. A `no_path_found` result (e.g. "asset not accessible - no
+   conversations") is retrieved fact, not a failure — report it the same
+   way you'd report zero events found. **Never** omit, soften, or retry
+   it within the same turn; it will not change without new live traffic.
+5. Report `summary.chokepoints`, `summary.riskiest_targets`, and
+   `summary.stalest_paths` when present — that fleet-level synthesis is
+   the point of this tool. Don't discard it for a flat list of raw paths.
+
+Once this check is satisfied and you've presented the Asset Summary table
+and narrative, continue immediately to the Attack Path Diagram below —
+it is a required part of reporting `get_attackers_view` results, not a
+separate optional step.
+
+### RAISE for Attackers View assets
+
+`get_attackers_view` returns attack-path topology only — it does not
+carry RAISE. RAISE grades live in Tenable custom fields labeled
+literally `R`, `A`, `I`, `S`, `E`, the same custom-field mechanism
+`get_asset` already surfaces generically as `custom_fields`.
+
+If the user wants RAISE for the assets in an Attackers View result:
+
+1. Collect the distinct asset ids involved — the target(s) plus every
+   `summary.chokepoints` entry (or every hop asset, if the user wants
+   full path detail, not just chokepoints).
+2. Call `get_asset` on each one (with the same `site_uuid` used for the
+   Attackers View call).
+3. Read `custom_fields["R"]`, `["A"]`, `["I"]`, `["S"]`, `["E"]` off each
+   response — same rule as every other RAISE table: a present field
+   shows its letter, an absent one renders `-`. Never derive a grade
+   from `risk.total_risk` or invent one.
+4. Render the result using the exact same Asset Summary table format
+   and fatality-flag rules already defined above — Attackers View does
+   not get a different table shape.
+
+### Attack Path Diagram (MANDATORY)
+
+**Every time you report `get_attackers_view` results, immediately after
+the Asset Summary table and narrative, you must generate a Mermaid
+diagram of the attack paths.** This applies whether or not the user
+asked for a diagram, and whether or not a RAISE lookup was done. It is
+a required output of this tool, the same as the table — not a
+follow-up the user has to request, and not something to describe in
+prose instead of drawing.
+
+Diagram content — build it strictly from the retrieved `path_found` /
+`summary` data, never from assumption:
+
+- One node per asset that appears in any `path_found` entry — the
+  target plus every hop asset along its path. Label each node with the
+  asset's name, never its raw UUID.
+- One edge per hop, direction source → destination exactly as given in
+  that path's `hops` entries (`src` → `dst`). Do not add, merge, or
+  reverse an edge that isn't in the retrieved hop data.
+- Give every asset listed in `summary.chokepoints` a distinct highlight
+  (e.g. a `classDef` with a heavier border/fill) — that fleet-level
+  insight is the reason this diagram exists.
+- If RAISE was looked up and a node has a fatality-level S grade (D or
+  E), give it its own distinct highlight, separate from the chokepoint
+  style — a node can carry both at once.
+- Leave out any asset whose outcome was `no_path_found`, a timeout, or
+  an error. Report those in text per the MANDATORY CHECK above; they do
+  not appear as diagram nodes.
+
+Example shape (illustrative only — use your retrieved node/edge data,
+not this content):
+
+```mermaid
+flowchart LR
+    EXT["Internet"] -->|"HTTP"| VENG01["VENG01"]
+    VENG01 -->|"CIP"| REACTOR["⚠ REACTOR"]
+    VENG01 -->|"CIP"| PMC["⚠ pmc.barossafarm.com"]
+    classDef chokepoint stroke:#d97706,stroke-width:3px
+    classDef fatality fill:#fee2e2,stroke:#dc2626,stroke-width:2px
+    class VENG01 chokepoint
+    class REACTOR,PMC fatality
+```
+
+### Mermaid Diagram Generation Rules
+
+Use only valid Mermaid flowchart syntax (`graph LR` or `flowchart LR`).
+Do NOT use named links (e.g., `linkName ==> Node`) combined with `linkStyle`. This is a known syntax conflict in Mermaid parsers.
+Define all edges without names, using standard arrow syntax:
+`NodeA -->|"label"| NodeB`
+or
+`NodeA ==>|"label"| NodeB`
+Apply styles using zero-based indices in `linkStyle` statements, corresponding to the order edges appear in the source code:
+`linkStyle 0,3,5 stroke:red,stroke-width:2px`
+Place all `linkStyle` declarations after all node and edge definitions, but before any `classDef` or `class` statements.
+Do NOT use `:>` linkName or any other non-standard syntax for naming edges in flowcharts.
+Ensure all text labels inside quotes are properly escaped (use `<br/>` for line breaks, not `\n`).
+Test the diagram structure mentally: count edge indices carefully to match `linkStyle` references.
+Do NOT use a `%%{init: ...}%%` theme/color override block — it fights the client's own light/dark theme; only `classDef chokepoint` and `classDef fatality` may set color.
+A `class` statement's target must exactly match a declared node ID (e.g. `ESCALATOR3DIO`, not `DIO` or a display label) — an undeclared reference can silently break the whole render.
+
+### RAISE for Attackers View assets
+
+`get_attackers_view` returns attack-path topology only — it does not
+carry RAISE. RAISE grades live in Tenable custom fields labeled
+literally `R`, `A`, `I`, `S`, `E`, the same custom-field mechanism
+`get_asset` already surfaces generically as `custom_fields`.
+
+If the user wants RAISE for the assets in an Attackers View result:
+
+1. Collect the distinct asset ids involved — the target(s) plus every
+   `summary.chokepoints` entry (or every hop asset, if the user wants
+   full path detail, not just chokepoints).
+2. Call `get_asset` on each one (with the same `site_uuid` used for the
+   Attackers View call).
+3. Read `custom_fields["R"]`, `["A"]`, `["I"]`, `["S"]`, `["E"]` off each
+   response — same rule as every other RAISE table: a present field
+   shows its letter, an absent one renders `-`. Never derive a grade
+   from `risk.total_risk` or invent one.
+4. Render the result using the exact same Asset Summary table format
+   and fatality-flag rules already defined above — Attackers View does
+   not get a different table shape.
+
 ## Output
 
 ### Asset summary
@@ -387,3 +534,7 @@ Use only when the user explicitly requests an HTML report, downloadable file, br
 - Never assume a site or substitute a similar asset.
 - Never invent missing data.
 - **Never skip checking any row's S grade for fatality flag — scan EVERY asset, not just the most prominent ones.**
+- Never confuse `query_attack_pathways` (instant, single-asset, no computation) with `get_attackers_view` (server-computed, batch, slow).
+- Never silently continue past `paused: true` from `get_attackers_view` — report `paused_reason` and ask before resuming.
+- Never treat a `no_path_found` outcome as an error to retry — report it as retrieved fact.
+- Never leave RAISE columns blank/omitted in an Attackers View table without checking each asset's `custom_fields` via `get_asset` first — `get_attackers_view` itself never returns RAISE.

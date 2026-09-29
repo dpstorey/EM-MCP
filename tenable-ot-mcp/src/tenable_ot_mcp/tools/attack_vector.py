@@ -52,9 +52,11 @@ from typing import Any
 
 from ..audit import AuditLog
 from ..tenable_client import TenableClient
+from ._attack_diagram import build_attack_mermaid, is_fatality_grade
 from ._enums import EXPR_BETWEEN, EXPR_EQUAL, EXPR_LIKE, expr, expr_and, expr_or
 from ._shared import clamp_page_size, unwrap_nodes
 from ._sites import resolve_read_site_ids, run_multi_site_read
+from .assets import CustomFieldLabelCache
 
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -66,6 +68,10 @@ DEFAULT_STOP_ON_STREAK = 3
 DEFAULT_POLL_INTERVAL_S = 1.5
 DEFAULT_POLL_TIMEOUT_S = 30.0
 DEFAULT_CONSECUTIVE_ERROR_LIMIT = 2
+# Safety-grade lookup for diagram highlighting (RAISE "S" custom field).
+FATALITY_FIELD_LABEL = "S"
+_FATALITY_LOOKUP_CONCURRENCY = 5
+_CUSTOM_SLOT_RE = re.compile(r"^customField(?:[1-9]|10)$")
 
 # ----------------------------------------------------------------------
 # GraphQL
@@ -457,6 +463,93 @@ def _analyze_batch(path_found: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 # ----------------------------------------------------------------------
+# Optional Mermaid diagram
+# ----------------------------------------------------------------------
+
+
+async def _fetch_fatality_ids(
+    client: TenableClient, machine_id: str, asset_ids: list[str]
+) -> tuple[set[str], str | None]:
+    """Return (asset ids whose Safety grade is D or E, warning-or-None).
+
+    Reads the custom field labelled `S` (the RAISE Safety grade) for each
+    asset. A failed lookup never fails the batch: the caller gets a
+    warning string so the diagram is never presented as "no fatalities"
+    when the grades simply couldn't be read.
+    """
+    try:
+        label_map = await CustomFieldLabelCache.get_or_fetch(client, icp_machine_id=machine_id)
+    except Exception as exc:  # noqa: BLE001
+        return set(), f"custom-field schema lookup failed: {exc}"
+    slot = next((s for s, label in label_map.items() if label == FATALITY_FIELD_LABEL), None)
+    if not slot or not _CUSTOM_SLOT_RE.match(slot):
+        return set(), f"no custom field labelled {FATALITY_FIELD_LABEL!r} on this site"
+
+    query = "query Q($asset: ID!) { asset(id: $asset) { id " + slot + " } }"
+    sem = asyncio.Semaphore(_FATALITY_LOOKUP_CONCURRENCY)
+
+    async def one(asset_id: str) -> tuple[str, Any]:
+        async with sem:
+            data = await client.query(query, variables={"asset": asset_id}, icp_machine_id=machine_id)
+            return asset_id, (data.get("asset") or {}).get(slot)
+
+    results = await asyncio.gather(*(one(a) for a in asset_ids), return_exceptions=True)
+    fatal: set[str] = set()
+    failed = 0
+    for res in results:
+        if isinstance(res, BaseException):
+            failed += 1
+            continue
+        asset_id, grade = res
+        if is_fatality_grade(grade):
+            fatal.add(asset_id)
+    warning = f"Safety-grade lookup failed for {failed} of {len(asset_ids)} assets" if failed else None
+    return fatal, warning
+
+
+async def _diagram_fields(
+    client: TenableClient,
+    machine_id: str,
+    path_found: list[dict[str, Any]],
+    summary: dict[str, Any],
+    *,
+    paused: bool,
+) -> dict[str, Any]:
+    """Build the optional `mermaid*` result fields. Never raises."""
+    if not path_found:
+        return {"mermaid": None, "mermaid_note": "No path_found results in this call, so there is nothing to draw."}
+    try:
+        asset_ids = sorted(
+            {
+                ep["id"]
+                for entry in path_found
+                for hop in (entry.get("attack_vector") or {}).get("hops") or []
+                for ep in (hop.get("src"), hop.get("dst"))
+                if ep and ep.get("is_asset") and ep.get("id")
+            }
+        )
+        fatal, warning = await _fetch_fatality_ids(client, machine_id, asset_ids)
+        mermaid = build_attack_mermaid(
+            path_found,
+            chokepoint_ids=[c["asset_id"] for c in summary.get("chokepoints") or []],
+            fatality_ids=fatal,
+        )
+    except Exception as exc:  # noqa: BLE001 — a diagram problem must not lose the batch results
+        return {"mermaid": None, "mermaid_note": f"Diagram generation failed: {exc}"}
+
+    notes = ["Output `mermaid` verbatim in a ```mermaid code fence. Do not redraw or edit it."]
+    if paused:
+        notes.append("Run is paused: this diagram covers only the paths found so far in this call.")
+    if warning:
+        notes.append(f"Fatality highlighting may be incomplete: {warning}.")
+    return {
+        "mermaid": mermaid,
+        "mermaid_fatality_asset_ids": sorted(fatal),
+        "mermaid_note": " ".join(notes),
+    }
+
+
+# ----------------------------------------------------------------------
 # Registration
 # ----------------------------------------------------------------------
 
@@ -503,7 +596,14 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "view can't reveal), `riskiest_targets`, `stalest_paths` "
             "(paths whose supporting conversation data is oldest — "
             "likely theoretical rather than currently live), and "
-            "external-network / backplane exposure counts."
+            "external-network / backplane exposure counts.\n\n"
+            "By default the result also carries `mermaid`: a ready-made, "
+            "syntactically valid Mermaid `flowchart LR` of every "
+            "`path_found` (one node per asset, labelled edges, "
+            "chokepoints and Safety-grade D/E assets highlighted). "
+            "Output it verbatim; do not redraw it. Pass "
+            "`include_diagram=false` when no diagram is wanted — it "
+            "saves tokens and one Safety-grade lookup per asset."
         ),
     )
     async def get_attackers_view(
@@ -514,6 +614,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         max_assets: int = DEFAULT_MAX_ASSETS,
         stop_on_streak: int = DEFAULT_STOP_ON_STREAK,
         force_through: bool = False,
+        include_diagram: bool = True,
         site_uuid: str | None = None,
         site_name: str | None = None,
         site_uuids: list[str] | None = None,
@@ -544,6 +645,9 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             force_through: Set true (typically when resuming with
                 `asset_ids`) to disable the streak-based early-stop for
                 this call.
+            include_diagram: Default true. Adds `mermaid` (ready-made
+                attack-path diagram, see tool description) to each
+                site's result. Set false when no diagram is needed.
             site_uuid / site_name / site_uuids: Site selector(s), same
                 convention as every other tool in this server.
         """
@@ -632,6 +736,15 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 entry["id"] for entry in pool if entry["id"] not in processed_ids
             ]
 
+            summary = _analyze_batch(path_found)
+            diagram = (
+                await _diagram_fields(
+                    client, machine_id, path_found, summary, paused=paused_reason is not None
+                )
+                if include_diagram
+                else {}
+            )
+
             return {
                 "site_uuid": machine_id,
                 "requested_count": len(pool),
@@ -643,7 +756,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 "paused": paused_reason is not None,
                 "paused_reason": paused_reason,
                 "remaining_asset_ids": remaining,
-                "summary": _analyze_batch(path_found),
+                "summary": summary,
+                **diagram,
             }
 
         if len(site_ids) == 1:
