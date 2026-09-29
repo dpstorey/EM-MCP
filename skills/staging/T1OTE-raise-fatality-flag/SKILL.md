@@ -103,7 +103,7 @@ Rules:
 - A missing or ungraded dimension is exactly `-` (one hyphen character) in its own R/A/I/S/E cell — never "Not available", "N/A", "None", "Unknown", or any other word.
 - Apply this per cell, not per row: an asset with some dimensions graded and others not shows real grades and `-` side by side in the same row, exactly as in the example above.
 - Do not add columns that are not in the header row (e.g. `Vendor`), and do not drop `Site` or `Description` to make room for one.
-- Preserve `Asset Type` exactly as returned by the tool (e.g. `PLC`, `I/O`, `HMI`) — do not re-title-case it into `Plc`, `Io`, or `Hmi`.
+- `Asset Type`: show the value the tool returned, except upper-case these three: `Plc` → `PLC`, `Io` → `I/O`, `Hmi` → `HMI`. Leave every other value unchanged (e.g. `OtServer`, `NetworkDevice`).
 - The separator row must have exactly as many `---`/`:---:`/`---:` groups as the header has columns (11, for this table). Keep the alignment markers (`:---:` for R/A/I/S/E, `---:` for the numeric score) rather than collapsing them to plain `---` — dropping them has been observed to cause a miscounted, mismatched separator row that breaks table rendering.
 - `⚠️ FATALITY RISK — ` prefixed to `REACTOR`'s and `PMC-01`'s `Asset` cells above is intentional, not an error. Note they trigger on *different* grades (`REACTOR` on S:D, `PMC-01` on S:E) — both grades flag independently, side by side in the same table. It applies only to the `Asset` column, alongside the normal RAISE grade columns, never in place of them.
 

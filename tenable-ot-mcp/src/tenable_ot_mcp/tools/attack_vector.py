@@ -462,6 +462,16 @@ def _analyze_batch(path_found: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _paging_fields(offset: int, processed: int, remaining: int) -> dict[str, Any]:
+    """Resume bookkeeping. `next_offset` is where to restart (same `cidrs`
+    or `asset_ids`, plus `offset=next_offset`) so the caller never has to
+    retype asset ids; it is None when nothing is left to process."""
+    return {
+        "offset": offset,
+        "next_offset": offset + processed if remaining else None,
+    }
+
+
 # ----------------------------------------------------------------------
 # Optional Mermaid diagram
 # ----------------------------------------------------------------------
@@ -582,7 +592,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "without touching the rest of the pool — and returns "
             "`remaining_asset_ids` plus a `paused_reason`. Surface this "
             "to the user and ask whether to continue (call again with "
-            "`asset_ids=remaining_asset_ids` and `force_through=true`) "
+            "the same `cidrs` plus `offset=next_offset` and "
+            "`force_through=true` — never retype asset ids) "
             "or stop here; do not decide silently either way. A "
             "genuine transport/API error (as opposed to a job Failure) "
             "instead stops the batch after `DEFAULT_CONSECUTIVE_ERROR_LIMIT` "
@@ -613,6 +624,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         max_hops: int = DEFAULT_MAX_HOPS,
         max_assets: int = DEFAULT_MAX_ASSETS,
         stop_on_streak: int = DEFAULT_STOP_ON_STREAK,
+        offset: int = 0,
         force_through: bool = False,
         include_diagram: bool = True,
         site_uuid: str | None = None,
@@ -626,8 +638,15 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             cidrs: One or more CIDRs (e.g. '10.253.10.0/24') defining the
                 target asset pool. Ignored if `asset_ids` is given.
             asset_ids: Explicit asset ids to process instead of resolving
-                `cidrs` — use this to resume a paused run by passing back
-                the previous response's `remaining_asset_ids`.
+                `cidrs`. Ids must be copied exactly. To resume a paused
+                run prefer the same `cidrs` plus `offset=next_offset`,
+                which avoids retyping ids.
+            offset: Skip this many assets from the start of the pool
+                (the resolved `cidrs` pool, or the `asset_ids` list)
+                before processing. Resume a paused run with the same
+                `cidrs`/`asset_ids` and `offset=next_offset` from the
+                previous response (plus `force_through=true`). Pool order
+                is the server's default asset order.
             entry_point: Asset id (recommended — from `query_assets`), or
                 a best-effort exact name / IP, to use as the attack
                 path's source. Omit to let the server select
@@ -655,6 +674,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             raise ValueError("provide either `cidrs` or `asset_ids`")
         if max_assets < 1:
             raise ValueError("max_assets must be at least 1")
+        if offset < 0:
+            raise ValueError("offset must be 0 or greater")
 
         site_ids = await resolve_read_site_ids(
             client, site_uuid=site_uuid, site_name=site_name, site_uuids=site_uuids
@@ -662,11 +683,12 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
 
         async def run_for_site(machine_id: str) -> dict[str, Any]:
             if asset_ids:
-                pool = [{"id": aid} for aid in asset_ids[:max_assets]]
+                pool = [{"id": aid} for aid in asset_ids[offset : offset + max_assets]]
             else:
                 pool = await _resolve_asset_pool(
-                    client, machine_id, cidrs=cidrs or [], max_assets=max_assets
+                    client, machine_id, cidrs=cidrs or [], max_assets=offset + max_assets
                 )
+                pool = pool[offset:]
             source_id = await _resolve_entry_point(client, machine_id, entry_point)
 
             path_found: list[dict[str, Any]] = []
@@ -756,6 +778,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 "paused": paused_reason is not None,
                 "paused_reason": paused_reason,
                 "remaining_asset_ids": remaining,
+                **_paging_fields(offset, len(processed_ids), len(remaining)),
                 "summary": summary,
                 **diagram,
             }
