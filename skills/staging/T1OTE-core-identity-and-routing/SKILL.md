@@ -94,6 +94,8 @@ Never use shell redirection, `cat >`, or heredocs to create files. Use `fs_write
 - Separate retrieved facts from analyst judgment.
 - Require explicit confirmation immediately before any write.
 - Complete report generation once unless another report is explicitly requested.
+- Never repeat a table, diagram, or report you already showed in this conversation. A closing summary refers to them ("table above", "diagram above") and lists only what is new, such as report file paths.
+- In your final reply, list every part of the user's request that is not done (for example a paused or skipped step) and why. Never describe the task as complete while a requested part is missing.
 - Before ending a reply, re-read the user's request and check every part is done or explicitly reported as not done. If a step paused for the user's decision, then after they answer, finish that step AND the remaining parts (e.g. reports) without asking permission again.
 - Site-scope language alone (e.g. "use London ICP for searches and reports") sets default scope — it is never itself a request to run an attackers view, generate a report, or take any other action.
 - If a tool call fails validation, do not resubmit the same call unchanged — fix the specific parameter, or stop and report the error instead of retrying blind.

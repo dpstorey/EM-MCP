@@ -55,7 +55,7 @@ def test_flowchart_lr_never_td():
 
 def test_one_node_per_asset_and_one_shared_external_root():
     out = build_attack_mermaid(PATHS)
-    assert out.count('["VENG01"]') == 1
+    assert out.count("[VENG01]") == 1
     assert out.count("Internet / External") == 1
     # ext -> VENG01 appears once even though two paths start there
     assert sum(1 for line in out.splitlines() if line.strip().startswith("ext -->")) == 1
@@ -63,14 +63,14 @@ def test_one_node_per_asset_and_one_shared_external_root():
 
 def test_edges_merge_protocols_without_ports():
     out = build_attack_mermaid(PATHS)
-    assert '|"HTTP, HTTPS, NTP"|' in out
+    assert "|HTTP, HTTPS, NTP|" in out
     assert "80/TCP" not in out
 
 
 def test_edge_label_truncates_long_protocol_lists():
     hop = _hop(None, VENG, tuple(f"P{i} ({i}/TCP)" for i in range(6)))
     out = build_attack_mermaid([{"asset_id": "a-veng", "attack_vector": {"hops": [hop]}}])
-    assert '"P0, P1, P2 +3"' in out
+    assert "|P0, P1, P2 +3|" in out
 
 
 def test_chokepoint_and_fatality_classes_and_prefix():
@@ -101,13 +101,29 @@ def test_empty_returns_none():
 
 
 def test_labels_are_sanitised():
-    weird = _ep("a-w", 'Bad "name" <b>x</b>\nline2')
+    weird = _ep("a-w", 'Bad "name" <b>x</b> (x) [y] {z} | a:b&c\nline2')
     out = build_attack_mermaid([{"asset_id": "a-w", "attack_vector": {"hops": [_hop(None, weird)]}}])
-    assert '"' not in out.split('n1["', 1)[1].split('"]', 1)[0]
-    assert "<" not in out and ">" not in out.replace("-->", "")
+    label = out.split("n1[", 1)[1].split("]", 1)[0]
+    for ch in '"<>()[]{}|:&\n':
+        assert ch not in label
+
+
+def test_output_never_contains_double_quotes():
+    out = build_attack_mermaid(PATHS, chokepoint_ids=["a-veng"], fatality_ids=["a-reactor"])
+    assert '"' not in out
+
+
+def test_hash_is_entity_encoded():
+    out = build_attack_mermaid([{"asset_id": "x", "attack_vector": {"hops": [_hop(None, _ep("x", "Endpoint #2572"))]}}])
+    assert "[Endpoint #35;2572]" in out
+
+
+def test_bare_end_label_is_protected():
+    out = build_attack_mermaid([{"asset_id": "x", "attack_vector": {"hops": [_hop(None, _ep("x", "end"))]}}])
+    assert "[End]" in out and "[end]" not in out
 
 
 def test_bare_ip_endpoint_uses_ip_label():
     bare = {"id": "10.1.1.1", "name": None, "is_asset": False, "ips": ["10.1.1.1"]}
     out = build_attack_mermaid([{"asset_id": "x", "attack_vector": {"hops": [_hop(None, bare)]}}])
-    assert '"10.1.1.1"' in out
+    assert "[10.1.1.1]" in out

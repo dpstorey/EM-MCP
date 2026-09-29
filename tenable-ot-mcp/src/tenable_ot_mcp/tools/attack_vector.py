@@ -64,7 +64,7 @@ _UUID_RE = re.compile(
 
 DEFAULT_MAX_HOPS = 5
 DEFAULT_MAX_ASSETS = 25
-DEFAULT_STOP_ON_STREAK = 3
+DEFAULT_STOP_ON_STREAK = 10
 DEFAULT_POLL_INTERVAL_S = 1.5
 DEFAULT_POLL_TIMEOUT_S = 30.0
 DEFAULT_CONSECUTIVE_ERROR_LIMIT = 2
@@ -547,7 +547,10 @@ async def _diagram_fields(
     except Exception as exc:  # noqa: BLE001 — a diagram problem must not lose the batch results
         return {"mermaid": None, "mermaid_note": f"Diagram generation failed: {exc}"}
 
-    notes = ["Output `mermaid` verbatim in a ```mermaid code fence. Do not redraw or edit it."]
+    notes = [
+        "Output `mermaid` verbatim in a ```mermaid code fence. Do not redraw or edit it. "
+        "It contains no double quotes: copy it exactly as decoded, with no backslashes."
+    ]
     if paused:
         notes.append("Run is paused: this diagram covers only the paths found so far in this call.")
     if warning:

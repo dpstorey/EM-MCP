@@ -96,7 +96,8 @@ diagram.
 
 - Paste `mermaid` verbatim inside a ```mermaid code fence, after the Asset
   Summary table. Do not redraw, rename, reorder, add, or remove anything.
-  This is the only diagram in your reply.
+  Output it ONCE. If you write a closing summary later (e.g. after
+  generating reports), do not paste it again; say "diagram above".
 - `mermaid_fatality_asset_ids` lists the assets the server flagged
   (Safety grade D or E, marked with ⚠ in the diagram). Your table flags by
   the same S rule. If the two disagree, say so; do not edit the diagram.

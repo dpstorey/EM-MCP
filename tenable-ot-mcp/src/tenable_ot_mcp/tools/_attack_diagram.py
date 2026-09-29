@@ -13,6 +13,10 @@ Output rules (these are the failure modes hand-written diagrams hit):
   * one edge per distinct (src, dst) pair, labelled with protocol names
   * `classDef chokepoint` / `classDef fatality` only — no `style` lines,
     no subgraphs, no %%{init}%% block
+  * NO double quotes anywhere. The diagram travels to the model inside a
+    JSON string, where every `"` shows up as `\\"`; a model that copies
+    it literally emits backslashes and breaks the render. Labels are
+    therefore sanitised to a safe character set and left unquoted.
 """
 
 from __future__ import annotations
@@ -38,11 +42,22 @@ def is_fatality_grade(value: Any) -> bool:
     return isinstance(value, str) and value.strip().upper() in FATALITY_GRADES
 
 
+# Anything outside this set (quotes, brackets, parentheses, pipes, colons,
+# angle brackets, ampersands, ...) is replaced with a space. `\w` keeps
+# unicode letters/digits; `#` is emitted as the Mermaid entity `#35;`.
+_UNSAFE_LABEL_CHARS = re.compile(r"[^\w ._/+,#\-\u26a0]")
+
+
 def _clean(text: Any) -> str:
-    """Make a value safe inside a double-quoted Mermaid label."""
-    s = str(text)
-    s = s.replace('"', "'").replace("<", "").replace(">", "")
-    return re.sub(r"\s+", " ", s).strip()
+    """Make a value safe as an UNQUOTED Mermaid label."""
+    s = _UNSAFE_LABEL_CHARS.sub(" ", str(text))
+    s = s.replace("#", "#35;")
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s:
+        return "unknown"
+    if s.lower() == "end":  # bare lowercase `end` terminates a flowchart block
+        s = s.capitalize()
+    return s
 
 
 def _protocol_names(hop: dict[str, Any]) -> list[str]:
@@ -133,12 +148,12 @@ def build_attack_mermaid(
         if node_key_by_id[nid] in fatalities:
             label = f"⚠ {label}"
         if nid == _EXTERNAL_ID:
-            lines.append(f'    {nid}(["{label}"])')
+            lines.append(f"    {nid}([{label}])")
         else:
-            lines.append(f'    {nid}["{label}"]')
+            lines.append(f"    {nid}[{label}]")
     for (src, dst), protos in edges.items():
         label = _edge_label(protos)
-        arrow = f'-->|"{label}"|' if label else "-->"
+        arrow = f"-->|{label}|" if label else "-->"
         lines.append(f"    {src} {arrow} {dst}")
 
     lines.extend(_CLASSDEFS)
