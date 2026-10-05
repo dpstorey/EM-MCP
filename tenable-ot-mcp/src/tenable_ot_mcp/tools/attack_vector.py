@@ -52,7 +52,7 @@ from typing import Any
 
 from ..audit import AuditLog
 from ..tenable_client import TenableClient
-from ._attack_diagram import build_attack_mermaid, is_fatality_grade
+from ._attack_diagram import build_attack_mermaid
 from ._enums import EXPR_BETWEEN, EXPR_EQUAL, EXPR_LIKE, expr, expr_and, expr_or
 from ._shared import clamp_page_size, unwrap_nodes
 from ._sites import resolve_read_site_ids, run_multi_site_read
@@ -68,9 +68,8 @@ DEFAULT_STOP_ON_STREAK = 10
 DEFAULT_POLL_INTERVAL_S = 1.5
 DEFAULT_POLL_TIMEOUT_S = 30.0
 DEFAULT_CONSECUTIVE_ERROR_LIMIT = 2
-# Safety-grade lookup for diagram highlighting (RAISE "S" custom field).
-FATALITY_FIELD_LABEL = "S"
-_FATALITY_LOOKUP_CONCURRENCY = 5
+# Generic diagram highlighting: the caller names a custom field and the values to flag.
+_FLAG_LOOKUP_CONCURRENCY = 5
 _CUSTOM_SLOT_RE = re.compile(r"^customField(?:[1-9]|10)$")
 
 # ----------------------------------------------------------------------
@@ -490,26 +489,31 @@ def _paging_fields(
 # ----------------------------------------------------------------------
 
 
-async def _fetch_fatality_ids(
-    client: TenableClient, machine_id: str, asset_ids: list[str]
+async def _fetch_flagged_ids(
+    client: TenableClient,
+    machine_id: str,
+    asset_ids: list[str],
+    field_label: str,
+    values: list[str],
 ) -> tuple[set[str], str | None]:
-    """Return (asset ids whose Safety grade is D or E, warning-or-None).
+    """Return (asset ids whose custom field `field_label` holds one of `values`, warning-or-None).
 
-    Reads the custom field labelled `S` (the RAISE Safety grade) for each
-    asset. A failed lookup never fails the batch: the caller gets a
-    warning string so the diagram is never presented as "no fatalities"
-    when the grades simply couldn't be read.
+    Generic: the server knows nothing about what the field means. Matching
+    is case- and whitespace-insensitive. A failed lookup never fails the
+    batch: the caller gets a warning so the diagram is never presented as
+    "nothing flagged" when the values simply couldn't be read.
     """
+    wanted = {v.strip().upper() for v in values if isinstance(v, str) and v.strip()}
     try:
         label_map = await CustomFieldLabelCache.get_or_fetch(client, icp_machine_id=machine_id)
     except Exception as exc:  # noqa: BLE001
         return set(), f"custom-field schema lookup failed: {exc}"
-    slot = next((s for s, label in label_map.items() if label == FATALITY_FIELD_LABEL), None)
+    slot = next((s for s, label in label_map.items() if label == field_label), None)
     if not slot or not _CUSTOM_SLOT_RE.match(slot):
-        return set(), f"no custom field labelled {FATALITY_FIELD_LABEL!r} on this site"
+        return set(), f"no custom field labelled {field_label!r} on this site"
 
     query = "query Q($asset: ID!) { asset(id: $asset) { id " + slot + " } }"
-    sem = asyncio.Semaphore(_FATALITY_LOOKUP_CONCURRENCY)
+    sem = asyncio.Semaphore(_FLAG_LOOKUP_CONCURRENCY)
 
     async def one(asset_id: str) -> tuple[str, Any]:
         async with sem:
@@ -517,17 +521,17 @@ async def _fetch_fatality_ids(
             return asset_id, (data.get("asset") or {}).get(slot)
 
     results = await asyncio.gather(*(one(a) for a in asset_ids), return_exceptions=True)
-    fatal: set[str] = set()
+    flagged: set[str] = set()
     failed = 0
     for res in results:
         if isinstance(res, BaseException):
             failed += 1
             continue
-        asset_id, grade = res
-        if is_fatality_grade(grade):
-            fatal.add(asset_id)
-    warning = f"Safety-grade lookup failed for {failed} of {len(asset_ids)} assets" if failed else None
-    return fatal, warning
+        asset_id, value = res
+        if isinstance(value, str) and value.strip().upper() in wanted:
+            flagged.add(asset_id)
+    warning = f"{field_label!r} lookup failed for {failed} of {len(asset_ids)} assets" if failed else None
+    return flagged, warning
 
 
 async def _diagram_fields(
@@ -537,6 +541,8 @@ async def _diagram_fields(
     summary: dict[str, Any],
     *,
     paused: bool,
+    flag_field: str | None = None,
+    flag_values: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the optional `mermaid*` result fields. Never raises."""
     if not path_found:
@@ -551,11 +557,16 @@ async def _diagram_fields(
                 if ep and ep.get("is_asset") and ep.get("id")
             }
         )
-        fatal, warning = await _fetch_fatality_ids(client, machine_id, asset_ids)
+        flagged: set[str] = set()
+        warning = None
+        if flag_field and flag_values:
+            flagged, warning = await _fetch_flagged_ids(
+                client, machine_id, asset_ids, flag_field, flag_values
+            )
         mermaid = build_attack_mermaid(
             path_found,
             chokepoint_ids=[c["asset_id"] for c in summary.get("chokepoints") or []],
-            fatality_ids=fatal,
+            flagged_ids=flagged,
         )
     except Exception as exc:  # noqa: BLE001 — a diagram problem must not lose the batch results
         return {"mermaid": None, "mermaid_note": f"Diagram generation failed: {exc}"}
@@ -568,10 +579,10 @@ async def _diagram_fields(
     if paused:
         notes.append("Run is paused: this diagram covers only the paths found so far in this call.")
     if warning:
-        notes.append(f"Fatality highlighting may be incomplete: {warning}.")
+        notes.append(f"Highlighting may be incomplete: {warning}.")
     return {
         "mermaid": mermaid,
-        "mermaid_fatality_asset_ids": sorted(fatal),
+        "mermaid_flagged_asset_ids": sorted(flagged),
         "mermaid_note": " ".join(notes),
     }
 
@@ -610,6 +621,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         offset: int = 0,
         force_through: bool = False,
         include_diagram: bool = True,
+        flag_field: str | None = None,
+        flag_values: list[str] | None = None,
         site_uuid: str | None = None,
         site_name: str | None = None,
         site_uuids: list[str] | None = None,
@@ -629,6 +642,9 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 (0 disables).
             force_through: Disable the streak pause for this call.
             include_diagram: Default true; adds `mermaid`. False omits it.
+            flag_field / flag_values: Optional highlighting. Custom-field label
+                (e.g. "S") and the values to mark (e.g. ["D","E"]); matching
+                assets get a warning prefix and colour in the diagram.
             site_uuid / site_name / site_uuids: Site selector(s).
         """
         if not asset_ids and not cidrs:
@@ -637,6 +653,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             raise ValueError("max_assets must be at least 1")
         if offset < 0:
             raise ValueError("offset must be 0 or greater")
+        if bool(flag_field) != bool(flag_values):
+            raise ValueError("`flag_field` and `flag_values` must be given together")
 
         site_ids = await resolve_read_site_ids(
             client, site_uuid=site_uuid, site_name=site_name, site_uuids=site_uuids
@@ -725,7 +743,8 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             summary = _analyze_batch(path_found)
             diagram = (
                 await _diagram_fields(
-                    client, machine_id, path_found, summary, paused=paused_reason is not None
+                    client, machine_id, path_found, summary, paused=paused_reason is not None,
+                    flag_field=flag_field, flag_values=flag_values,
                 )
                 if include_diagram
                 else {}

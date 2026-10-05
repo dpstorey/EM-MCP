@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from tenable_ot_mcp.tools._attack_diagram import build_attack_mermaid, is_fatality_grade
+from tenable_ot_mcp.tools._attack_diagram import build_attack_mermaid
 
 
 def _ep(aid, name, *, is_asset=True):
@@ -42,11 +42,6 @@ PATHS = [
 ]
 
 
-def test_grades():
-    assert is_fatality_grade("D") and is_fatality_grade(" e ")
-    assert not is_fatality_grade("C") and not is_fatality_grade(None) and not is_fatality_grade("")
-
-
 def test_flowchart_lr_never_td():
     out = build_attack_mermaid(PATHS)
     assert out.splitlines()[0] == "flowchart LR"
@@ -73,21 +68,21 @@ def test_edge_label_truncates_long_protocol_lists():
     assert "|P0, P1, P2 +3|" in out
 
 
-def test_chokepoint_and_fatality_classes_and_prefix():
-    out = build_attack_mermaid(PATHS, chokepoint_ids=["a-veng"], fatality_ids=["a-reactor", "a-pmc"])
-    assert "classDef chokepoint" in out and "classDef fatality" in out
+def test_chokepoint_and_flagged_classes_and_prefix():
+    out = build_attack_mermaid(PATHS, chokepoint_ids=["a-veng"], flagged_ids=["a-reactor", "a-pmc"])
+    assert "classDef chokepoint" in out and "classDef flagged" in out
     lines = out.splitlines()
     assert any(l.strip().startswith("class ") and l.strip().endswith(" chokepoint") for l in lines)
-    fatal_line = next(l for l in lines if l.strip().endswith(" fatality") and l.strip().startswith("class "))
-    assert fatal_line.count(",") == 1  # two nodes
+    flag_line = next(l for l in lines if l.strip().endswith(" flagged") and l.strip().startswith("class "))
+    assert flag_line.count(",") == 1  # two nodes
     assert "⚠ REACTOR" in out and "⚠ pmc.barossafarm.com" in out
-    assert "⚠ VENG01" not in out  # chokepoint alone is not a fatality
+    assert "⚠ VENG01" not in out  # chokepoint alone is not flagged
 
 
-def test_node_can_be_both_chokepoint_and_fatality():
-    out = build_attack_mermaid(PATHS, chokepoint_ids=["a-veng"], fatality_ids=["a-veng"])
+def test_node_can_be_both_chokepoint_and_flagged():
+    out = build_attack_mermaid(PATHS, chokepoint_ids=["a-veng"], flagged_ids=["a-veng"])
     assert "⚠ VENG01" in out
-    assert out.count(" chokepoint") >= 2 and out.count(" fatality") >= 2
+    assert out.count(" chokepoint") >= 2 and out.count(" flagged") >= 2
 
 
 def test_no_classes_when_nothing_flagged():
@@ -109,7 +104,7 @@ def test_labels_are_sanitised():
 
 
 def test_output_never_contains_double_quotes():
-    out = build_attack_mermaid(PATHS, chokepoint_ids=["a-veng"], fatality_ids=["a-reactor"])
+    out = build_attack_mermaid(PATHS, chokepoint_ids=["a-veng"], flagged_ids=["a-reactor"])
     assert '"' not in out
 
 

@@ -17,16 +17,39 @@ skill. If a `submit_report_job` call fails validation (e.g. a missing
 `asset_id`), do not resubmit the same call unchanged — fix the specific
 parameter, or stop and tell the user the error instead of retrying blind.
 
+Sorting: computed columns such as `total_risk` cannot be sorted on and make the
+call fail. Leave `sort` out (the server's default order is fine) unless the
+user asked for one, and if you do sort, use only a column named in the
+error's "Sortable columns" list.
+
 Module choice: an "asset report" (all assets in a subnet or site) is module
 `asset_inventory`; a "vulnerability findings report" is `vulnerability_findings`.
 `risk_profile` is for ONE asset and needs `asset_id`; do not use it for a fleet.
 Pass `site_name` (never a typed UUID) and `subnet` as returned by the user.
 
+**Asset report always includes the RAISE columns.** Every `asset_inventory`
+call must carry these two params, in addition to `site_name` and `subnet`:
+
+- `risk_grade_fields`: `{"R":"R","A":"A","I":"I","S":"S","E":"E"}`
+- `risk_grade_scale_name`: `"RAISE"`
+
+Example: `submit_report_job(module="asset_inventory", params={"site_name":
+"London", "subnet": "10.253.0.0/20", "risk_grade_fields": {"R":"R","A":"A",
+"I":"I","S":"S","E":"E"}, "risk_grade_scale_name": "RAISE"})`. Do not look
+the values up first. Only if the call is rejected because a field label or
+the scale is not found, call `list_custom_fields` (for the site's labels) or
+`list_risk_grade_scales` once, correct the params and resubmit. Never submit
+an asset report without the RAISE columns; if you cannot add them, say so
+instead of submitting.
+
 1. Establish the selected site(s) (site selection is handled in the base
    agent instructions — reuse the site already chosen in this conversation).
-2. If unsure which report module fits the request, call `list_report_types`
-   (and `list_available_columns` for a module with selectable columns,
-   `list_themes` for available banners/colors).
+2. For an "asset report" (`asset_inventory`) or a "vulnerability findings
+   report" (`vulnerability_findings`), skip discovery: do NOT call
+   `list_report_types`, `list_available_columns` or `list_themes`. Their
+   output is large and the defaults are right. Go straight to step 5. Call
+   those tools only for a module not named in this skill, or when the user
+   asks for specific columns or a theme.
 3. Gather the data the chosen module needs — asset IDs, site UUIDs, and any
    other identifiers — the same way you would for a chat answer, with the
    same site-routing and pagination rules.
@@ -41,7 +64,10 @@ Pass `site_name` (never a typed UUID) and `subnet` as returned by the user.
 6. Report back the exact output path(s) it returns. Do not re-verify the
    file's contents yourself (no `grep`/`sed`/`ls` checks) — rendering and
    validation are the server's responsibility, not yours.
-7. Stop after delivery. Do not generate another report unless explicitly
+7. Only paths returned by a `submit_report_job` call in THIS conversation are
+   this request's reports. `list_recent_report_jobs` lists earlier sessions;
+   never present those as new output.
+8. Stop after delivery. Do not generate another report unless explicitly
    requested.
 
 ## Report retention / purge

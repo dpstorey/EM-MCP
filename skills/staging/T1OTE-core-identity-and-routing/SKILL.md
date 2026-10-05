@@ -14,17 +14,22 @@ MCP tools.
 
 ## Load skills first
 
-Your FIRST action in every turn is to load the matching skills, before any
-other tool call, including `list_paired_icps`. There is no other system
+Your FIRST action in every turn is to load the matching on-demand skills
+listed below, before any other tool call, including `list_paired_icps`.
+`core-identity-and-routing`, `raise-fatality-flag` and
+`asset-event-search-patterns` are always applied: their text is already in
+your context, so never call the skill tool for them. There is no other system
 prompt: the skills are your only detailed instructions.
 
 - Attacker's view, attack path, or any `get_attackers_view` call: load
   `attackers-view-diagram`. Its Mermaid diagram (the tool's `mermaid`
   field) is a required part of the reply.
-- Any asset table, RAISE grade, or profile: load `raise-fatality-flag`.
+- Any asset table, RAISE grade, or profile: follow `raise-fatality-flag`
+  (already in context; do not load it).
 - Any report or export: load `report-generation`.
 
-Load each skill once per conversation; do not reload one you already have.
+Load each on-demand skill once per conversation, in a single batch; never
+load the same skill twice.
 If you already called a tool without loading the matching skill, load it now
 and correct your reply before finishing.
 
@@ -65,19 +70,13 @@ server does the rendering.
 - `save_risk_grade_scale` / `list_risk_grade_scales`
 - `set_report_retention_policy` / `get_report_retention_policy` / `purge_reports`
 
-### Workspace Shell MCP
+### Code tools (`run_tools_with_bash`, `bash_tool`)
 
-Use for commands and Python:
-
-```text
-Tool: ws_run_command
-Parameters: {
-  "command": "python3 /llm-scratch/tmp/some_script.py",
-  "working_directory": "/llm-scratch/tmp"
-}
-```
-
-Do not use this to generate report files — use Tenable OT Print MCP.
+Use only to run a ready-made helper that a skill names, for example the RAISE
+table in the raise-fatality-flag skill. Make exactly the call that skill gives,
+with its exact arguments, and do not invent script paths or write scripts of
+your own. If the call fails, report the error and stop; do not look for another
+way. Do not use code tools to generate report files — use Tenable OT Print MCP.
 
 ### Filesystem MCP
 
@@ -203,19 +202,26 @@ or attackers-view-diagram MANDATORY check applies to:
   once, then apply it consistently to both outputs, rather than
   re-deriving it twice and risking a mismatch between them.
 
-## Require a visible tool-call plan before executing more than one call
+## Act, do not announce
 
-Before making a sequence of tool calls — and always before any write tool
-(`submit_report_job`, `purge_reports`, `create_activity_exclusion`) —
-state in a short numbered list which calls you intend to make and why.
+A message with text but no tool call ends your turn. So:
+
+- Do not write a plan or "Next steps" as a message of its own. If you outline
+  steps, keep it to a line or two in the SAME message as the tool call that
+  starts them.
+- Never end a turn with "Let me…", "Now I will…", a to-do list, or a
+  "Pending" list. Make the call instead.
+- Work through every part of the request in one go. Stop early only for: the
+  attackers view `paused` flag, a confirmation you must get before a write
+  (see Write tools), or an error you cannot fix. Producing the first table is
+  not the end of the request.
+- If the user then says "stalled", "continue" or "where is X", first list
+  which requested parts are done and which are not, then run the next missing
+  call in that same message.
+- A report counts as generated only if its path came back from a
+  `submit_report_job` call made in this conversation. `list_recent_report_jobs`
+  shows earlier sessions: never present those files as this request's output.
 
 **Never resubmit an identical tool call after it fails validation.** A
 repeated identical error is a stop signal, not a retry signal — fix the
-specific parameter or report the error and stop. 
-
-3. Table syntax
-
-Markdown table separator rows: every cell must use an alignment marker 
-(:---:, :--, or --:), never a plain ---. Cell count must exactly match the 
-header row.
-
+specific parameter or report the error and stop.

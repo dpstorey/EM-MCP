@@ -5,13 +5,15 @@ Pure functions only (no I/O, no Tenable client) so the output can be
 unit-tested and so small local models never have to hand-write Mermaid
 from raw hop data. Attack-path topology comes straight from
 `path_found[*].attack_vector.hops`; chokepoints come from the batch
-`summary`; fatality ids (Safety grade D or E) are supplied by the caller.
+`summary`; flagged ids (assets the caller wants highlighted, chosen by any
+rule the caller likes) are supplied by the caller. This module has no
+knowledge of any grading scheme.
 
 Output rules (these are the failure modes hand-written diagrams hit):
   * always `flowchart LR`, never TD
   * one node per asset, one shared "Internet / External" root
   * one edge per distinct (src, dst) pair, labelled with protocol names
-  * `classDef chokepoint` / `classDef fatality` only — no `style` lines,
+  * `classDef chokepoint` / `classDef flagged` only — no `style` lines,
     no subgraphs, no %%{init}%% block
   * NO double quotes anywhere. The diagram travels to the model inside a
     JSON string, where every `"` shows up as `\\"`; a model that copies
@@ -24,8 +26,6 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-FATALITY_GRADES = frozenset({"D", "E"})
-
 _EXTERNAL_ID = "ext"
 _EXTERNAL_LABEL = "Internet / External"
 _MAX_LABEL_PROTOCOLS = 3
@@ -33,13 +33,8 @@ _PORT_SUFFIX = re.compile(r"\s*\(.*?\)\s*$")
 
 _CLASSDEFS = (
     "    classDef chokepoint stroke:#d97706,stroke-width:3px",
-    "    classDef fatality fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#7f1d1d",
+    "    classDef flagged fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#7f1d1d",
 )
-
-
-def is_fatality_grade(value: Any) -> bool:
-    """True for a Safety (S) grade of D or E (case/space-insensitive)."""
-    return isinstance(value, str) and value.strip().upper() in FATALITY_GRADES
 
 
 # Anything outside this set (quotes, brackets, parentheses, pipes, colons,
@@ -99,7 +94,7 @@ def build_attack_mermaid(
     path_found: list[dict[str, Any]],
     *,
     chokepoint_ids: Iterable[str] = (),
-    fatality_ids: Iterable[str] = (),
+    flagged_ids: Iterable[str] = (),
 ) -> str | None:
     """Render `path_found` as a Mermaid `flowchart LR`, or None if empty.
 
@@ -109,7 +104,7 @@ def build_attack_mermaid(
     outcomes are never passed in, so they never appear as nodes.
     """
     chokepoints = set(chokepoint_ids)
-    fatalities = set(fatality_ids)
+    flagged = set(flagged_ids)
 
     node_ids: dict[str, str] = {}  # endpoint key -> mermaid node id
     node_labels: dict[str, str] = {}  # mermaid node id -> display name
@@ -145,7 +140,7 @@ def build_attack_mermaid(
     ordered = sorted(node_labels, key=lambda n: (n != _EXTERNAL_ID, len(n), n))
     for nid in ordered:
         label = _clean(node_labels[nid])
-        if node_key_by_id[nid] in fatalities:
+        if node_key_by_id[nid] in flagged:
             label = f"⚠ {label}"
         if nid == _EXTERNAL_ID:
             lines.append(f"    {nid}([{label}])")
@@ -158,9 +153,9 @@ def build_attack_mermaid(
 
     lines.extend(_CLASSDEFS)
     choke_nodes = [n for n in ordered if node_key_by_id[n] in chokepoints]
-    fatal_nodes = [n for n in ordered if node_key_by_id[n] in fatalities]
+    flagged_nodes = [n for n in ordered if node_key_by_id[n] in flagged]
     if choke_nodes:
         lines.append(f"    class {','.join(choke_nodes)} chokepoint")
-    if fatal_nodes:
-        lines.append(f"    class {','.join(fatal_nodes)} fatality")
+    if flagged_nodes:
+        lines.append(f"    class {','.join(flagged_nodes)} flagged")
     return "\n".join(lines)

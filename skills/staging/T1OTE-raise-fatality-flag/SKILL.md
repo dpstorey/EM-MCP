@@ -38,7 +38,7 @@ if the user wants RAISE for those assets, call `get_asset` on each one
 
 ## Site column
 
-`Site` is the site/ICP name resolved for this query — via `list_paired_icps`, or otherwise already established from the `site_uuid` in scope for this call. It is never the asset's own `location` custom field (a separate per-asset attribute, e.g. `"LAB"`) — the two can coincidentally look alike, but they come from different sources. If the site name hasn't been resolved yet in this conversation, resolve it before rendering the table rather than defaulting to a per-asset field.
+`Site` is the site/ICP name resolved for this query (the exact `name` from `list_paired_icps`, e.g. `London`; the example rows below use `London` only as a sample) — via `list_paired_icps`, or otherwise already established from the `site_uuid` in scope for this call. It is never the asset's own `location` custom field (a separate per-asset attribute, e.g. `"LAB"`) — the two can coincidentally look alike, but they come from different sources. If the site name hasn't been resolved yet in this conversation, resolve it before rendering the table rather than defaulting to a per-asset field.
 
 ## RAISE grade extraction (MANDATORY CHECK)
 
@@ -80,6 +80,35 @@ When a fatality-level grade is present:
 
 ## Asset Summary table format
 
+**Ready-made table (required).** Do not build the table yourself and do not
+call `query_assets` first: the code fetches the assets itself, so they never
+pass through you. For any RAISE summary of a subnet or site, call the tool
+`run_tools_with_bash` once with these arguments, using the exact site name (as
+in `list_paired_icps`) and the CIDR from the user's request, and changing
+nothing else:
+
+- `code`: `eval "$(python3 /mnt/data/raise_table.py --bash-init)"; raise_table "London" "10.253.0.0/20"`
+- `tool_manifest`: `["query_assets_mcp_tenable-ot-em"]`
+- `timeout`: leave the default
+
+The tool result is hidden in a collapsed panel, so the user cannot see it
+unless you write it out. After the call, your chat reply for this step must
+contain the complete table: copy the tool output character for character,
+from the first table line to the final `raise_table v…` line, before anything
+else you write. A summary, a count or a list of the flagged assets is never a
+substitute for the table. Never retype an asset name from memory; copy it.
+Keep the `Rows:`, `Fatality-flagged` and version lines: they prove the table
+is complete and current. After the copied output you may add only the step
+marker the user asked for (for example `Step 2 complete`). Do not add a
+second fatality list, commentary or a closing sentence, and do not re-sort,
+re-type or complete any row. If the `Rows:` line reports a MISMATCH, say so
+and do not present the table as complete.
+
+If the call prints an `ERROR:` line, returns an error, or prints nothing, say
+so in one line with the error text and stop. Do not try another way to get the
+data: no other tools, no `bash_tool`, no `python3`, no report jobs, and never
+build the table by hand.
+
 The header row below is fixed. Reproduce it exactly — same 11 columns, same
 names, same order, same left-to-right position for R, A, I, S, E. Never
 rename, merge, reorder, drop, or add a column.
@@ -89,15 +118,22 @@ rename, merge, reorder, drop, or add a column.
 ```markdown
 | Site | Asset | IP Address | Asset Type | Numerical Risk Score | Description | R | A | I | S | E |
 |---|---|---|---|---:|---|:---:|:---:|:---:|:---:|:---:|
-| LONDON-ICP | ⚠️ FATALITY RISK — REACTOR | 10.253.10.244 | PLC | 52.4 | - | A | D | C | D | E |
-| LONDON-ICP | ⚠️ FATALITY RISK — PMC-01 | 10.253.10.252 | Controller | 33.5 | - | B | B | B | E | A |
-| LONDON-ICP | I/O #204 | 10.253.10.10 | I/O | 34.0 | - | - | - | - | - | - |
+| London | ⚠️ FATALITY RISK — REACTOR | 10.253.10.244 | PLC | 52.4 | - | A | D | C | D | E |
+| London | ⚠️ FATALITY RISK — PMC-01 | 10.253.10.252 | Controller | 33.5 | - | B | B | B | E | A |
+| London | I/O #204 | 10.253.10.10 | I/O | 34.0 | - | - | - | - | - | - |
 ```
 
 Map returned name, IPs, type, `risk.total_risk` to one decimal, description or `-`, and independent RAISE grades.
 
+Keep rows short:
+
+- Sort rows by `Numerical Risk Score`, highest first, unless the user asked for another order.
+- `IP Address`: show the first IP only.
+- `Description`: at most 40 characters; cut longer text at 40 and end with `…`. Use `-` when empty.
+
 Rules:
 
+- **Scope:** for a RAISE summary of a subnet, site or asset list, the table has one row for EVERY asset in that scope (all of them, not only the fatality or chokepoint ones). Never replace it with a shortened table or prose. If you cannot list every asset, say which ones are missing and why. The attackers view has its own table of the assets on the found paths; it does not replace this one.
 - R, A, I, S, E are five separate columns in the header row above, each holding exactly one character (a letter grade or `-`). There is no sixth "RAISE" column and no merged column.
 - Do not combine the five grades into one cell or one column under any label — not `"R:B, A:B, I:B, S:E, E:A"`, not `"B/B/B/A/E"`, not a column titled `"RAISE Grades"` or `"RAISE Grades (R/A/I/S/E)"` or any other combined phrasing. If you find yourself writing a slash, colon, or comma between grade letters, stop — that means they were merged into one column and need to be split back into the five columns above.
 - A missing or ungraded dimension is exactly `-` (one hyphen character) in its own R/A/I/S/E cell — never "Not available", "N/A", "None", "Unknown", or any other word.
