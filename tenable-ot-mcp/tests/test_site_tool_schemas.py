@@ -50,7 +50,7 @@ def test_all_site_scoped_reads_expose_a_site_selector() -> None:
     mcp = FakeMCP()
     register_read_tools(mcp, FakeClient(), FakeAudit())  # type: ignore[arg-type]
 
-    em_root_tools = {"list_paired_icps", "tenable_ot_status"}
+    em_root_tools = {"list_paired_icps", "tenable_ot_status", "describe_policy_type"}
     for name, fn in mcp.tools.items():
         if name in em_root_tools:
             continue

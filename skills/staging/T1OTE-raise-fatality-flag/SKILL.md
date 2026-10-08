@@ -87,9 +87,13 @@ pass through you. For any RAISE summary of a subnet or site, call the tool
 in `list_paired_icps`) and the CIDR from the user's request, and changing
 nothing else:
 
-- `code`: `eval "$(python3 /mnt/data/raise_table.py --bash-init)"; raise_table "London" "10.253.0.0/20"`
-- `tool_manifest`: `["query_assets_mcp_tenable-ot-em"]`
-- `timeout`: leave the default
+```
+{"code": "eval \"$(python3 /mnt/data/raise_table.py --bash-init)\"; raise_table \"London\" \"10.253.0.0/20\"",
+ "tool_manifest": ["query_assets_mcp_tenable-ot-em"]}
+```
+
+`tool_manifest` is its own argument of the tool call, never text inside
+`code`. Leave `timeout` out.
 
 The tool result is hidden in a collapsed panel, so the user cannot see it
 unless you write it out. After the call, your chat reply for this step must

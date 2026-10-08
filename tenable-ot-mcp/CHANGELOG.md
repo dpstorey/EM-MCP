@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+
+- Ten narrow policy-creation tools, one per Tenable OT policy type, over a shared registry:
+  `create_conversation_policy` (protocol policy, `Conversation` event; the unauthorized-conversation
+  policy), `create_activity_policy`, `create_asset_policy`, `create_port_policy`,
+  `create_ids_src_dst_policy`, `create_ids_general_policy`, `create_intrusion_policy`,
+  `create_spike_policy`, `create_rediscovered_asset_policy`, `create_tag_value_policy`. Each exposes only
+  its own arguments (about 9-12) so small models are not faced with a 25-argument form; clients such as
+  LibreChat can untick the ones not needed. Source/destination scoping uses Tenable's conjunctive normal
+  form (`[[Group]]`: outer AND, inner OR, per-member negate) with `!id` shorthand. `initial_state`
+  (`enabled` | `disabled`, default `enabled`): Tenable has no create-time flag, so `disabled` is create
+  followed by `disablePolicy`; a failed second step is reported, never silent. `actions` may be empty.
+- `update_policy`: full replace through the matching `set*Policy` mutation.
+- `describe_policy_type` (no network) and `get_policy` (read).
+
 ## [0.5.3] - 2026-08-24
 
 ### Fixed

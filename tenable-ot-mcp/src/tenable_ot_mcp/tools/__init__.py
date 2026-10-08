@@ -27,6 +27,7 @@ def register_read_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> Non
         events,
         groups,
         policies,
+        policy_create,
         scans,
         sensors,
         status,
@@ -41,6 +42,7 @@ def register_read_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> Non
     vuln_findings.register_read_tools(mcp, client, audit)
     events.register_read_tools(mcp, client, audit)
     policies.register_read_tools(mcp, client, audit)
+    policy_create.register_read_tools(mcp, client, audit)
     topology.register_read_tools(mcp, client, audit)
     sensors.register_read_tools(mcp, client, audit)
     correlation.register_read_tools(mcp, client, audit)
@@ -54,8 +56,9 @@ def register_read_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> Non
 
 def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> None:
     """Register all write tools (gated by `write_tools_enabled` in config)."""
-    from . import groups, scans, writes
+    from . import groups, policy_create, scans, writes
 
     writes.register_write_tools(mcp, client, audit)
     scans.register_write_tools(mcp, client, audit)
     groups.register_write_tools(mcp, client, audit)
+    policy_create.register_write_tools(mcp, client, audit)

@@ -72,11 +72,14 @@ server does the rendering.
 
 ### Code tools (`run_tools_with_bash`, `bash_tool`)
 
-Use only to run a ready-made helper that a skill names, for example the RAISE
-table in the raise-fatality-flag skill. Make exactly the call that skill gives,
-with its exact arguments, and do not invent script paths or write scripts of
-your own. If the call fails, report the error and stop; do not look for another
-way. Do not use code tools to generate report files — use Tenable OT Print MCP.
+Use only for the ready-made RAISE table call in the raise-fatality-flag
+skill: make exactly that call, with its exact arguments. Call
+`list_paired_icps`, `get_asset`, `get_attackers_view` and `submit_report_job`
+directly, as normal tool calls, never through `run_tools_with_bash`. Do not
+write scripts of your own or use code tools for reports. If
+`run_tools_with_bash` replies "requires a tool_manifest", you put
+`tool_manifest` inside `code`: pass it as a separate argument and remove it
+from `code`. For any other error, report it and stop.
 
 ### Filesystem MCP
 
