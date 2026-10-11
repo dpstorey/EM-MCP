@@ -24,7 +24,9 @@ Verify
 docker compose ps tenable-ot
 docker compose logs --tail=100 tenable-ot
 ```
-Suggested agent prompts are available in`prompt/` Some Smaller MOE models require more re-inforcement.
+Suggested agent prompts are available in `prompt/`. Some smaller MOE models require more reinforcement.
+
+The `prompt/` directory provides a simple unified prompt for smaller models such as Holo and Qwen 3.6-35B-A3B. Newer models such as Qwen 3.8-flash-next and Qwen 3.8-27B, as well as larger models such as Mistral-Medium-3.5-128, Claude and ChatGPT, can make use of the additional skills in `~/skills`.
 
 ### Tool List
 A categorized tool list document is available in file `tot-mcp-tool-list.md`.
@@ -39,3 +41,18 @@ EXAMPLE_SESSION.md is a transcript of an example session with a Tenable OT syste
 - Version synchronization with upstream releases
 
 
+
+### T1OTE Skills
+
+Skills live in `skills/production/` (released) and `skills/staging/` (work in progress). Live copies are served from the LibreChat `skill/` folder and must match production.
+
+| Skill | Loading | Purpose |
+|---|---|---|
+| `T1OTE-core-identity-and-routing` | always-apply | Identity, tool map, code-tool rules, skill loading order |
+| `T1OTE-raise-fatality-flag` | always-apply | RAISE table via `raise_table.py` in `run_tools_with_bash` (`query_assets` only, `tool_manifest` as its own argument) |
+| `T1OTE-asset-event-search-patterns` | always-apply | Asset and event search patterns |
+| `T1OTE-attackers-view-diagram` | on demand | Attacker's view: counts and table are copied from the tool result, never recounted; RAISE grades come from the step 2 table (`get_asset` only for assets not in it); `force_through=true` when the user says to continue through no-path assets; Mermaid diagram pasted verbatim |
+| `T1OTE-detailed-profile-and-analysis` | on demand | Detailed asset profile and analysis |
+| `T1OTE-report-generation` | on demand | `asset_inventory` and `vulnerability_findings` reports; no discovery calls; always RAISE risk-grade columns |
+
+Promote a skill by moving its folder from `staging/` to `production/` and syncing the live copy.
