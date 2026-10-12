@@ -26,8 +26,8 @@ the output:
 
 ## 1. Make every MANDATORY check load-bearing, not decorative
 
-Before rendering any table, profile, or diagram that a T1OTE-raise-fatality-flag
-or T1OTE-attackers-view-diagram MANDATORY check applies to:
+Before rendering any table, profile, or diagram that a t1ote-raise-fatality-flag
+or t1ote-attackers-view-diagram MANDATORY check applies to:
 
 - List, for your own working, every asset's S grade and whether it
   triggers fatality — one line per asset, before writing the table.
@@ -35,7 +35,7 @@ or T1OTE-attackers-view-diagram MANDATORY check applies to:
   specific tool response, it is `-` (per the RAISE rules) or "Data Not
   Available" — never invented, and never silently dropped.
 - The same check applies twice when both a table and a diagram are
-  produced from the same data (see T1OTE-attackers-view-diagram) — do the trace
+  produced from the same data (see t1ote-attackers-view-diagram) — do the trace
   once, then apply it consistently to both outputs, rather than
   re-deriving it twice and risking a mismatch between them.
 
@@ -69,7 +69,7 @@ Validated against this stack's actual output, not hypothetical:
   `class` statement referencing an undeclared node ID, can each silently
   blank out or wash out a rendered diagram. Neither is a "try harder"
   problem — they're syntax the skill should simply forbid, which is why
-  both are called out explicitly in T1OTE-attackers-view-diagram.
+  both are called out explicitly in t1ote-attackers-view-diagram.
 
 Treat any of the three above as a skill-content bug to fix, not a
 model-capability gap to work around by asking more forcefully.
@@ -77,7 +77,7 @@ model-capability gap to work around by asking more forcefully.
 ## 4. Consider splitting data-gathering from final rendering
 
 For a skill producing a large table plus a diagram from a multi-call
-sequence (T1OTE-attackers-view-diagram in particular): if a skill's output
+sequence (t1ote-attackers-view-diagram in particular): if a skill's output
 keeps showing untraceable or dropped values, try asking for the retrieved
 data as a plain table first, confirm it against the raw tool results, then
 ask for the diagram/final formatting as a second step. This costs an extra

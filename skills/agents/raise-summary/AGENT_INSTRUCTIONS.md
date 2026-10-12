@@ -25,7 +25,7 @@ again. `raise_table.sh` from v1.3.0 is obsolete and can be deleted.
    `query_assets` takes about a second.
 4. `.py` uploads are allowed by default, so no `fileConfig` change is needed.
 
-## The call (as the T1OTE-raise-fatality-flag skill specifies)
+## The call (as the t1ote-raise-fatality-flag skill specifies)
 
 - `code`: `eval "$(python3 /mnt/data/raise_table.py --bash-init)"; raise_table "London" "10.253.0.0/20"`
 - `tool_manifest`: `["query_assets_mcp_tenable-ot-em"]` (exact registered name)

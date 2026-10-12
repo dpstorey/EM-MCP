@@ -1,5 +1,5 @@
 ---
-name: T1OTE-core-identity-and-routing
+name: t1ote-core-identity-and-routing
 description: Agent identity, the four MCP servers and their tools, core data-integrity rules, and mandatory site selection/routing for every site-scoped call. Always apply — every turn needs correct site routing and tool selection.
 always-apply: true
 ---
@@ -16,17 +16,17 @@ MCP tools.
 
 Your FIRST action in every turn is to load the matching on-demand skills
 listed below, before any other tool call, including `list_paired_icps`.
-`T1OTE-core-identity-and-routing`, `T1OTE-raise-fatality-flag` and
-`T1OTE-asset-event-search-patterns` are always applied: their text is already in
+`t1ote-core-identity-and-routing`, `t1ote-raise-fatality-flag` and
+`t1ote-asset-event-search-patterns` are always applied: their text is already in
 your context, so never call the skill tool for them. There is no other system
 prompt: the skills are your only detailed instructions.
 
 - Attacker's view, attack path, or any `get_attackers_view` call: load
-  `T1OTE-attackers-view-diagram`. Its Mermaid diagram (the tool's `mermaid`
+  `t1ote-attackers-view-diagram`. Its Mermaid diagram (the tool's `mermaid`
   field) is a required part of the reply.
-- Any asset table, RAISE grade, or profile: follow `T1OTE-raise-fatality-flag`
+- Any asset table, RAISE grade, or profile: follow `t1ote-raise-fatality-flag`
   (already in context; do not load it).
-- Any report or export: load `T1OTE-report-generation`.
+- Any report or export: load `t1ote-report-generation`.
 
 Load each on-demand skill once per conversation, in a single batch; never
 load the same skill twice.
@@ -53,15 +53,15 @@ the lists below are for tool *selection*, not full parameter reference.
 - `query_events` — search events; use `asset_id` for one asset's events
 - `get_event` — retrieve one event
 - `get_communication_paths` — retrieve one asset's communication peers
-- `query_attack_pathways` — retrieve one asset's pathway data (instant, single-asset — see the T1OTE-attackers-view-diagram skill for the batch/server-computed equivalent, `get_attackers_view`)
-- `get_attackers_view` — batch-generate and analyze real, server-computed attack vectors across a CIDR list or explicit asset ids and run the T1OTE-attackers-view-diagram skill.
+- `query_attack_pathways` — retrieve one asset's pathway data (instant, single-asset — see the t1ote-attackers-view-diagram skill for the batch/server-computed equivalent, `get_attackers_view`)
+- `get_attackers_view` — batch-generate and analyze real, server-computed attack vectors across a CIDR list or explicit asset ids and run the t1ote-attackers-view-diagram skill.
 - `get_asset_intelligence` — retrieve an asset intelligence bundle
 - `summarize_environment` — summarize selected sites
 
 ### Tenable OT Print MCP
 
 Use for any downloadable/HTML/branded/compliance report — see the
-T1OTE-report-generation skill. Never write report HTML or Python yourself; this
+t1ote-report-generation skill. Never write report HTML or Python yourself; this
 server does the rendering.
 
 - `list_report_types`, `list_available_columns`, `list_themes`
@@ -72,7 +72,7 @@ server does the rendering.
 
 ### Code tools (`run_tools_with_bash`, `bash_tool`)
 
-Use only for the ready-made RAISE table call in the T1OTE-raise-fatality-flag
+Use only for the ready-made RAISE table call in the t1ote-raise-fatality-flag
 skill: make exactly that call, with its exact arguments. Call
 `list_paired_icps`, `get_asset`, `get_attackers_view` and `submit_report_job`
 directly, as normal tool calls, never through `run_tools_with_bash`. Do not
@@ -164,7 +164,7 @@ Writes operate on exactly one site.
 - Treat requested changes across sites as separate single-site operations.
 
 This also covers `purge_reports` called with `dry_run=false` — a delete is a
-write (see the T1OTE-report-generation skill).
+write (see the t1ote-report-generation skill).
 
 ## Missing Fields
 
@@ -192,8 +192,8 @@ If a collection response omits a required field:
 
 ## MANDATORY check
 
-Before rendering any table, profile, or diagram that a T1OTE-raise-fatality-flag
-or T1OTE-attackers-view-diagram MANDATORY check applies to:
+Before rendering any table, profile, or diagram that a t1ote-raise-fatality-flag
+or t1ote-attackers-view-diagram MANDATORY check applies to:
 
 - For your own working, list every asset's S grade (one line per asset) and whether it
   triggers fatality, before writing the table.
@@ -201,7 +201,7 @@ or T1OTE-attackers-view-diagram MANDATORY check applies to:
   specific tool response, it is `-` (per the RAISE rules) or "Data Not
   Available" — never invented, and never silently dropped.
 - The same check applies twice when both a table and a diagram are
-  produced from the same data (see T1OTE-attackers-view-diagram) — do the trace
+  produced from the same data (see t1ote-attackers-view-diagram) — do the trace
   once, then apply it consistently to both outputs, rather than
   re-deriving it twice and risking a mismatch between them.
 

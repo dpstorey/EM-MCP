@@ -1,5 +1,5 @@
 ---
-name: T1OTE-report-generation
+name: t1ote-report-generation
 description: Generating downloadable/branded/compliance reports via Tenable OT Print MCP, plus report retention/purge. Use for "report", "export", "download", "purge reports", or any Tenable OT Print MCP tool.
 always-apply: false
 ---

@@ -1,5 +1,5 @@
 ---
-name: T1OTE-asset-event-search-patterns
+name: t1ote-asset-event-search-patterns
 description: CIDR subnet asset searches, asset-scoped event searches, the retrieval/pagination pattern, and result-count handling. Always apply — nearly every query_assets/query_events call depends on these rules.
 always-apply: true
 ---
