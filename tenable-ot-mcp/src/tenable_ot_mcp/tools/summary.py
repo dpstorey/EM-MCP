@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Summary tool: summarize_environment.
+"""Summary tools: summarize_environment and get_classification_summary.
 
 A one-shot snapshot of the Tenable OT deployment's shape and scale —
 total counts plus the most useful subtotals (events resolved/unresolved,
@@ -66,6 +66,104 @@ def _count(block: dict | None) -> int:
     return (block or {}).get("totalCount") or 0
 
 
+# ---------------------------------------------------------------------------
+# Classification quality
+#
+# Every asset starts as "Endpoint" (enum value `Unknown`) and only moves off
+# it once Tenable positively classifies it, so the share of assets still
+# `Unknown` is a data-quality meter for the inventory.
+# ---------------------------------------------------------------------------
+
+UNCLASSIFIED_TYPE = "Unknown"
+
+# Asset types accepted by the `type` *filter* (the Tenable UI Type dropdown),
+# which is narrower than the editable UserDefinedAssetType vocabulary.
+_FILTER_ASSET_TYPES: tuple[str, ...] = (
+    "BackplaneModule", "Bms", "Camera", "Cnc", "Controller", "Cp", "Dcs",
+    "DomainController", "Eng", "FileServer", "Gateway", "Hmi", "Ied",
+    "IndustrialGateway", "IndustrialSwitch", "Io", "Iot", "NetworkDevice",
+    "OtDevice", "OtServer", "Plc", "PowerSupply", "Printer", "Router", "Rtu",
+    "SerialEthernetBridge", "Server", "StorageDevice", "Switch", "TenableEm",
+    "TenableIcp", "TenableSensor", "ThreeDPrinter", "Unknown",
+    "VideoManagementSystem", "Workstation",
+)  # fmt: skip
+
+# Guidance thresholds on the unclassified share, in percent.
+GOOD_MAX_PCT = 5.0
+FAIR_MAX_PCT = 10.0
+
+
+def _type_alias(asset_type: str) -> str:
+    return f"t_{asset_type}"
+
+
+def _classification_query(by_type: bool) -> str:
+    """Build the one-shot count query (total, unclassified, optional per-type)."""
+    parts = [
+        "assetsTotal: assets { totalCount }",
+        f'assetsUnknown: assets(filter: {{field: type, op: In, values: ["{UNCLASSIFIED_TYPE}"]}}) '
+        "{ totalCount }",
+    ]
+    if by_type:
+        parts.extend(
+            f'{_type_alias(t)}: assets(filter: {{field: type, op: In, values: ["{t}"]}}) '
+            "{ totalCount }"
+            for t in _FILTER_ASSET_TYPES
+            if t != UNCLASSIFIED_TYPE
+        )
+    return "query Q {\n  " + "\n  ".join(parts) + "\n}"
+
+
+def classification_result(
+    site_uuid: str, data: dict[str, Any], by_type: bool = False
+) -> dict[str, Any]:
+    """Shape raw GraphQL counts into the tool's result."""
+    total = _count(data.get("assetsTotal"))
+    unclassified = _count(data.get("assetsUnknown"))
+    classified = max(total - unclassified, 0)
+    pct = round(100.0 * unclassified / total, 1) if total else None
+    if pct is None:
+        quality = "no_assets"
+    elif pct <= GOOD_MAX_PCT:
+        quality = "good"
+    elif pct <= FAIR_MAX_PCT:
+        quality = "fair"
+    else:
+        quality = "poor"
+    result: dict[str, Any] = {
+        "site_uuid": site_uuid,
+        "assets_total": total,
+        "classified": classified,
+        "unclassified": unclassified,
+        "unclassified_pct": pct,
+        "quality": quality,
+        "quality_thresholds_pct": {"good_max": GOOD_MAX_PCT, "fair_max": FAIR_MAX_PCT},
+        "note": (
+            "Unclassified = Tenable type `Unknown` (shown as 'Endpoint' in the UI). "
+            "Every asset starts here and moves off only when positively classified."
+        ),
+    }
+    if quality == "poor":
+        result["warning"] = (
+            "A high share of assets is unclassified: type-based asset groups "
+            "(for example 'all Controllers') will miss them. Prefer IP, segment "
+            "or asset-list groups until classification improves."
+        )
+    if by_type:
+        counts = {
+            t: _count(data.get(_type_alias(t)))
+            for t in _FILTER_ASSET_TYPES
+            if t != UNCLASSIFIED_TYPE
+        }
+        counts[UNCLASSIFIED_TYPE] = unclassified
+        by = {t: n for t, n in sorted(counts.items(), key=lambda kv: -kv[1]) if n}
+        result["by_type"] = by
+        other = total - sum(by.values())
+        if other > 0:
+            result["by_type_other"] = other
+    return result
+
+
 def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> None:
     """Register the environment summary tool."""
 
@@ -127,6 +225,45 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 },
                 "policies": {"total": _count(d.get("policiesTotal"))},
             }
+
+        return await run_site_read(
+            client,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            worker=query_site,
+        )
+
+
+    @mcp.tool(
+        title="Asset classification quality",
+        description=(
+            "Reports how much of the asset inventory is still unclassified, "
+            "as a data-quality meter. Every asset starts as 'Endpoint' "
+            "(Tenable type `Unknown`) and only moves off it when positively "
+            "classified, so the unclassified share shows how settled "
+            "discovery and enrichment are.\n\n"
+            "Returns assets_total, classified, unclassified, "
+            "unclassified_pct and a quality rating (good <=5%, fair <=10%, "
+            "poor >10%), plus a warning when poor: type-based asset groups "
+            "will miss unclassified assets. Set `by_type=true` for a "
+            "per-type breakdown. Counts only; never lists assets. Call this "
+            "for 'data quality', 'how many assets are unclassified', or "
+            "before building zones from asset types."
+        ),
+    )
+    async def get_classification_summary(
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+        site_uuids: list[str] | None = None,
+        by_type: bool = False,
+    ) -> dict[str, Any]:
+        """Return unclassified-asset counts and ratio per site."""
+        query = _classification_query(by_type)
+
+        async def query_site(machine_id: str) -> dict[str, Any]:
+            data = await client.query(query, icp_machine_id=machine_id)
+            return classification_result(machine_id, data, by_type)
 
         return await run_site_read(
             client,

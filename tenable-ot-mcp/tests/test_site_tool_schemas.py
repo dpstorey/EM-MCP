@@ -68,6 +68,7 @@ def test_collection_reads_expose_site_arrays() -> None:
         "query_vulnerabilities",
         "query_events",
         "summarize_environment",
+        "get_classification_summary",
         "list_detection_policies",
         "query_policy_findings",
         "query_vulnerability_findings",

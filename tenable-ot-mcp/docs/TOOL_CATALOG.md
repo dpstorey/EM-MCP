@@ -96,6 +96,7 @@ analysis itself — no graph algorithms, no clustering, no LLM calls.
 | Tool | One-line purpose |
 |---|---|
 | `summarize_environment` | One-shot snapshot: total counts and subtotals across assets (by criticality, hidden), events (resolved / unresolved), vulnerabilities (by severity), sensors, segments, zones, detection policies. |
+| `get_classification_summary` | Data-quality meter: total assets, how many are still unclassified (`Unknown`, shown as 'Endpoint' in the UI), the unclassified percentage and a good/fair/poor rating; optional `by_type` breakdown. Counts only, never lists assets. |
 
 ### Active scans (read)
 

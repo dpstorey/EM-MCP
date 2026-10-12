@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `get_classification_summary` read tool: asset classification quality in one call. Returns total,
+  classified and unclassified (`Unknown` / UI 'Endpoint') counts, the unclassified percentage and a
+  good (<=5%) / fair (<=10%) / poor rating with a warning that type-based asset groups will miss
+  unclassified assets; optional `by_type` breakdown. Supports the usual site selectors. Also adds an
+  `endpoint` / `unclassified` kind to `query_assets`.
 - Asset-type filters on `create_asset_group` / `update_asset_group` accept the Tenable UI display
   labels (for example `BMS Controller`) as well as enum names (`Bms`); matching is case- and
   separator-insensitive, and unknown types return "did you mean" suggestions.
