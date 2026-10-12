@@ -1,5 +1,5 @@
 ---
-name: raise-fatality-flag
+name: T1OTE-raise-fatality-flag
 description: RAISE grading (R/A/I/S/E) rules and the mandatory fatality-flag check, plus the fixed Asset Summary table format. Apply whenever any asset table, detailed profile, or RAISE grade is rendered, from any source (asset search, attacker's view, reports).
 always-apply: true
 ---

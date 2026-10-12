@@ -1,5 +1,5 @@
 ---
-name: attackers-view-diagram
+name: T1OTE-attackers-view-diagram
 description: "Running get_attackers_view: batch server-computed attack-path analysis, paused/no_path_found handling, RAISE lookup, and the mandatory Mermaid diagram. Use for 'attacker's view', 'attack path', or any get_attackers_view call."
 always-apply: false
 ---
@@ -97,10 +97,10 @@ RAISE. To add it:
    the target(s) plus every `summary.chokepoints` entry (or every hop asset,
    if the user wants full path detail).
 3. For assets you looked up, read `custom_fields["R"]`, `["A"]`, `["I"]`, `["S"]`, `["E"]` off each
-   response, per the raise-fatality-flag skill. Never derive a grade from
+   response, per the T1OTE-raise-fatality-flag skill. Never derive a grade from
    `risk.total_risk` or invent one.
 4. Render using the exact same Asset Summary table format and
-   fatality-flag rules from raise-fatality-flag — Attackers View does not
+   fatality-flag rules from T1OTE-raise-fatality-flag — Attackers View does not
    get a different table shape.
 
 ## Attack Path Diagram
@@ -117,7 +117,7 @@ diagram.
   generating reports), do not paste it again; say "diagram above".
 - **Flagging.** The server knows nothing about RAISE. To highlight
   fatality-level assets in the diagram, pass `flag_field="S"` and
-  `flag_values=["D","E"]` (the Safety grade rule from raise-fatality-flag)
+  `flag_values=["D","E"]` (the Safety grade rule from T1OTE-raise-fatality-flag)
   on the `get_attackers_view` call. Pass both or neither; if the site uses a
   different field or scale, pass that instead. Flagged assets get a ⚠ in the
   diagram.

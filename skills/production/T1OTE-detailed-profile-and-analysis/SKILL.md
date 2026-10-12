@@ -1,5 +1,5 @@
 ---
-name: detailed-profile-and-analysis
+name: T1OTE-detailed-profile-and-analysis
 description: Building a detailed single-asset profile, and the rules for analyst-style narrative/assessment output. Use for "detailed profile", "tell me about this asset", "analysis", "assessment", or any request for narrative judgment beyond a raw table.
 always-apply: false
 ---
@@ -13,7 +13,7 @@ Include only retrieved sections:
 - Site and identity
 - Type, vendor, model, firmware, criticality, status, and location
 - RAISE detail (for full grade descriptions, prefer a `risk_profile` print
-  report over reproducing the matrix in chat — see the raise-fatality-flag
+  report over reproducing the matrix in chat — see the T1OTE-raise-fatality-flag
   skill; apply its mandatory fatality-flag callout here too)
 - Vulnerabilities, CVSS, KEV, evidence, and mitigation
 - Recent events with requested time range and ordering
