@@ -40,21 +40,35 @@ def test_filter_type_list_is_unique_and_has_unknown() -> None:
     assert "Unknown" in _FILTER_ASSET_TYPES
 
 
-def test_ratio_and_quality_bands() -> None:
-    good = classification_result("s", _counts(1000, 50))
-    assert (good["classified"], good["unclassified_pct"], good["quality"]) == (950, 5.0, "good")
-    fair = classification_result("s", _counts(1000, 100))
-    assert (fair["unclassified_pct"], fair["quality"]) == (10.0, "fair")
-    poor = classification_result("s", _counts(1480, 212))
-    assert (poor["unclassified_pct"], poor["quality"]) == (14.3, "poor")
-    assert "warning" in poor
-    assert "warning" not in good
+def test_data_quality_against_default_target() -> None:
+    ok = classification_result("s", _counts(1000, 100))  # 90.0 meets the default 90
+    assert (ok["classified"], ok["data_quality_pct"], ok["quality"]) == (900, 90.0, "good")
+    assert (ok["target_pct"], ok["meets_target"], ok["unclassified_pct"]) == (90.0, True, 10.0)
+    assert "warning" not in ok
+    low = classification_result("s", _counts(1480, 212))
+    assert low["data_quality_pct"] == 85.7 and low["unclassified_pct"] == 14.3
+    assert low["quality"] == "poor"
+    assert low["meets_target"] is False and "warning" in low
+
+
+def test_target_is_settable() -> None:
+    data = _counts(1000, 60)  # 94.0% quality
+    assert classification_result("s", data)["quality"] == "good"
+    strict = classification_result("s", data, min_quality_pct=95.0)
+    assert strict["quality"] == "poor" and strict["target_pct"] == 95.0
+    assert strict["meets_target"] is False
+    assert classification_result("s", data, min_quality_pct=94.0)["quality"] == "good"
+
+
+def test_live_london_numbers() -> None:
+    r = classification_result("s", _counts(3487, 1454))
+    assert (r["data_quality_pct"], r["unclassified_pct"], r["quality"]) == (58.3, 41.7, "poor")
 
 
 def test_empty_site_has_no_ratio() -> None:
     r = classification_result("s", _counts(0, 0))
-    assert r["unclassified_pct"] is None
-    assert r["quality"] == "no_assets"
+    assert r["data_quality_pct"] is None and r["unclassified_pct"] is None
+    assert r["quality"] == "no_assets" and r["meets_target"] is None
 
 
 def test_missing_blocks_count_as_zero() -> None:

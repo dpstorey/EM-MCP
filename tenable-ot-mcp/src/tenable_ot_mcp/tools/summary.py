@@ -88,9 +88,9 @@ _FILTER_ASSET_TYPES: tuple[str, ...] = (
     "VideoManagementSystem", "Workstation",
 )  # fmt: skip
 
-# Guidance thresholds on the unclassified share, in percent.
-GOOD_MAX_PCT = 5.0
-FAIR_MAX_PCT = 10.0
+# Default target for data quality (the classified share), in percent.
+# Callers can override it per call with `min_quality_pct`.
+DEFAULT_MIN_QUALITY_PCT = 90.0
 
 
 def _type_alias(asset_type: str) -> str:
@@ -115,39 +115,44 @@ def _classification_query(by_type: bool) -> str:
 
 
 def classification_result(
-    site_uuid: str, data: dict[str, Any], by_type: bool = False
+    site_uuid: str,
+    data: dict[str, Any],
+    by_type: bool = False,
+    min_quality_pct: float = DEFAULT_MIN_QUALITY_PCT,
 ) -> dict[str, Any]:
     """Shape raw GraphQL counts into the tool's result."""
     total = _count(data.get("assetsTotal"))
     unclassified = _count(data.get("assetsUnknown"))
     classified = max(total - unclassified, 0)
-    pct = round(100.0 * unclassified / total, 1) if total else None
-    if pct is None:
-        quality = "no_assets"
-    elif pct <= GOOD_MAX_PCT:
-        quality = "good"
-    elif pct <= FAIR_MAX_PCT:
-        quality = "fair"
+    if total:
+        quality_pct: float | None = round(100.0 * classified / total, 1)
+        unclassified_pct: float | None = round(100.0 * unclassified / total, 1)
+        meets: bool | None = 100.0 * classified / total >= min_quality_pct
+        rating = "good" if meets else "poor"
     else:
-        quality = "poor"
+        quality_pct = unclassified_pct = meets = None
+        rating = "no_assets"
     result: dict[str, Any] = {
         "site_uuid": site_uuid,
+        "data_quality_pct": quality_pct,
+        "quality": rating,
+        "target_pct": min_quality_pct,
+        "meets_target": meets,
         "assets_total": total,
         "classified": classified,
         "unclassified": unclassified,
-        "unclassified_pct": pct,
-        "quality": quality,
-        "quality_thresholds_pct": {"good_max": GOOD_MAX_PCT, "fair_max": FAIR_MAX_PCT},
+        "unclassified_pct": unclassified_pct,
         "note": (
-            "Unclassified = Tenable type `Unknown` (shown as 'Endpoint' in the UI). "
-            "Every asset starts here and moves off only when positively classified."
+            "Data quality = share of assets positively classified (higher is better). "
+            "Unclassified = Tenable type `Unknown` (shown as 'Endpoint' in the UI); "
+            "every asset starts there and moves off only when positively classified."
         ),
     }
-    if quality == "poor":
+    if rating == "poor":
         result["warning"] = (
-            "A high share of assets is unclassified: type-based asset groups "
-            "(for example 'all Controllers') will miss them. Prefer IP, segment "
-            "or asset-list groups until classification improves."
+            "Data quality is below the target: many assets are unclassified, so type-based asset "
+            "groups (for example 'all Controllers') will miss them. Prefer IP, "
+            "segment or asset-list groups until classification improves."
         )
     if by_type:
         counts = {
@@ -238,15 +243,16 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
     @mcp.tool(
         title="Asset classification quality",
         description=(
-            "Reports how much of the asset inventory is still unclassified, "
-            "as a data-quality meter. Every asset starts as 'Endpoint' "
-            "(Tenable type `Unknown`) and only moves off it when positively "
-            "classified, so the unclassified share shows how settled "
-            "discovery and enrichment are.\n\n"
-            "Returns assets_total, classified, unclassified, "
-            "unclassified_pct and a quality rating (good <=5%, fair <=10%, "
-            "poor >10%), plus a warning when poor: type-based asset groups "
-            "will miss unclassified assets. Set `by_type=true` for a "
+            "Reports asset data quality: the percentage of assets that are "
+            "positively classified (higher is better). Every asset starts as "
+            "'Endpoint' (Tenable type `Unknown`) and only moves off it when "
+            "positively classified, so this shows how settled discovery and "
+            "enrichment are.\n\n"
+            "Returns data_quality_pct and a rating against a target: good "
+            "when data quality is at or above `min_quality_pct` (default 90), "
+            "otherwise poor, plus assets_total, classified, unclassified and "
+            "unclassified_pct, and a warning when poor: type-based asset "
+            "groups will miss unclassified assets. Set `by_type=true` for a "
             "per-type breakdown. Counts only; never lists assets. Call this "
             "for 'data quality', 'how many assets are unclassified', or "
             "before building zones from asset types."
@@ -257,13 +263,16 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         site_name: str | None = None,
         site_uuids: list[str] | None = None,
         by_type: bool = False,
+        min_quality_pct: float = DEFAULT_MIN_QUALITY_PCT,
     ) -> dict[str, Any]:
         """Return unclassified-asset counts and ratio per site."""
+        if not 0.0 <= min_quality_pct <= 100.0:
+            raise ValueError(f"min_quality_pct must be between 0 and 100; got {min_quality_pct}")
         query = _classification_query(by_type)
 
         async def query_site(machine_id: str) -> dict[str, Any]:
             data = await client.query(query, icp_machine_id=machine_id)
-            return classification_result(machine_id, data, by_type)
+            return classification_result(machine_id, data, by_type, min_quality_pct)
 
         return await run_site_read(
             client,
