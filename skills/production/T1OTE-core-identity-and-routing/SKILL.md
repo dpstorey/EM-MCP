@@ -57,6 +57,8 @@ the lists below are for tool *selection*, not full parameter reference.
 - `get_attackers_view` — batch-generate and analyze real, server-computed attack vectors across a CIDR list or explicit asset ids and run the t1ote-attackers-view-diagram skill.
 - `get_asset_intelligence` — retrieve an asset intelligence bundle
 - `summarize_environment` — summarize selected sites
+- `get_classification_summary` — data quality: how many assets are still unclassified (`Unknown`, shown as 'Endpoint'), as a percentage and good/fair/poor rating; counts only. Use for 'data quality', 'how many unclassified', or before building zones from asset types
+- A request for the **status** of a site means `tenable_ot_status` (and, only if asked for more, `summarize_environment` or `get_classification_summary`). Never list assets for a status request.
 
 ### Tenable OT Print MCP
 
