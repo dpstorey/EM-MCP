@@ -410,7 +410,7 @@ def resolve_asset_type_name(name: str) -> str:
     key = _label_key(name)
     if key in _ASSET_TYPE_LOOKUP:
         return _ASSET_TYPE_LOOKUP[key]
-    close = difflib.get_close_matches(key, list(_ASSET_TYPE_LOOKUP), n=5, cutoff=0.6)
+    close = difflib.get_close_matches(key, list(_ASSET_TYPE_LOOKUP), n=5, cutoff=0.7)
     hints = sorted({_ASSET_TYPE_LOOKUP[c] for c in close})
     msg = f"unknown asset type {name!r}"
     if hints:
