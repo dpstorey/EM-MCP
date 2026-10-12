@@ -1,6 +1,6 @@
 ---
 name: t1ote-iec62443-onboarding
-description: Guided onboarding of a Tenable OT site to an IEC 62443 zones-and-conduits baseline. Collects zones, CIDR blocks and conduits from chat or a spreadsheet, shows a plan, and only after approval creates asset groups and detection policies through EM-MCP.
+description: Guided onboarding of a Tenable OT site to an IEC 62443 zones-and-conduits baseline. Collects zones, CIDR blocks and conduits from chat or a spreadsheet, shows a plan, and only after approval creates asset groups and detection policies through the Tenable OT MCP (Enterprise Manager edition).
 status: draft
 ---
 
@@ -13,7 +13,7 @@ Tenable OT has no native IEC 62443 objects. This skill builds them from what exi
 
 Native Tenable "zones" are a different concept and are out of scope. Never conflate them.
 
-Follow `EM-MCP/skills/_t1ote-shared/local-model-hardening.md`. The rules that matter most here are repeated below.
+The rules below are written for small local models, which tend to recite a rule rather than perform it: each check produces visible output.
 
 ## Hard rules
 
@@ -56,6 +56,13 @@ Call `tenable_ot_status`. If write tools are not enabled, say so and offer the *
 ### 1. Site
 
 `list_paired_icps`. Ask which site. Record its `site_uuid`; use it on every later call. Ask for the customer's name for the site (goes into the model).
+
+Once the site is chosen, report **classification quality** before going further (read-only, two calls):
+
+1. `query_assets` with `site_uuid`, `limit: 1`: note `total_count` (all assets).
+2. `query_assets` with `site_uuid`, `kind: "endpoint"`, `limit: 1`: note `total_count` (assets still unclassified; the Tenable UI calls the type "Endpoint", the enum value is `Unknown`).
+
+Say it in one line, for example "212 of 1,480 assets (14%) are still Endpoint (not yet classified)". Every asset starts as Endpoint and moves off only when positively classified, so a high ratio means discovery or enrichment has not settled. Above roughly 10%, warn that Type-based asset groups (for example "all Controllers") will miss assets and that zone membership built on type is unreliable until classification improves; prefer IP, segment or asset-list groups for those zones. Do not block the flow; this is advice, not a gate.
 
 ### 2. Input method
 
@@ -134,4 +141,4 @@ Generated per run (strategy S1): one **boundary** policy per zone, one **unzoned
 - `references/naming.md` object naming and idempotency
 - `references/protocols.json` protocol catalogue and aliases
 - `references/sample-groups.json` sample asset groups
-- Repo `Proposal.md` and `mcp-extensions/specs/policy-mutations.md` for design and GraphQL facts
+- `docs/` in the repository for the design notes and the policy model
