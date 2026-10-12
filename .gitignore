@@ -2,3 +2,4 @@ tenable-ot-mcp-data/
 .DS_Store
 .env
 
+.venv/ # keep venvs out of git
