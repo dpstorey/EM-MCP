@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+> Releases up to 0.5.x originate from the upstream project by John Walley /
+> OneClearPath, Incorporated (<https://gitlab.com/jwalley/tenable-ot-mcp>), and the
+> historical compare and release links below point there. This repository is a
+> diverged fork; report issues at <https://github.com/dpstorey/EM-MCP/issues>.
+
 ## [Unreleased]
 
 ### Added

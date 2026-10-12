@@ -52,8 +52,9 @@ We follow [Semantic Versioning](https://semver.org/):
 - `MINOR` — new tools, additive changes.
 - `PATCH` — bug fixes only.
 
-Releases are tagged in git and trigger a CI/CD pipeline that publishes
-a multi-arch image to the GitLab Container Registry.
+Releases are tagged in git on <https://github.com/dpstorey/EM-MCP>. There is
+no published container image for this edition; build it from the repository
+(see the README).
 
 ## License
 

@@ -3,12 +3,16 @@
 ## Reporting a vulnerability
 
 If you believe you've found a security vulnerability in this project,
-please **do not** open a public issue. Instead, email:
+please **do not** open a public issue. Report it privately through GitHub:
 
-  **security@1clearpath.com**
+  **<https://github.com/dpstorey/EM-MCP/security/advisories/new>**
 
-Or use GitLab's confidential issue feature if you prefer the issue
-tracker. Mark the issue **Confidential** before submitting.
+(Repository **Security** tab, then **Report a vulnerability**.)
+
+This policy covers the code in this repository. The original upstream
+project (<https://gitlab.com/jwalley/tenable-ot-mcp>) is a separate codebase
+with its own maintainers; issues in code that exists only in the upstream
+should be reported there.
 
 Please include:
 
@@ -29,10 +33,12 @@ This project's threat model assumes:
 - The container's `/data` volume is protected by the host's standard
   filesystem permissions; an attacker with shell access to the host
   is outside the threat model.
-- TLS termination for production deployments is provided by a reverse
-  proxy in front of the container (nginx, Caddy, Traefik, or a cloud
-  load balancer). The container itself listens on plain HTTP by
-  default.
+- HTTPS is on by default: the container generates a self-signed
+  certificate on first start. For production, replace it with a
+  CA-signed certificate, or set `MCP_TLS_DISABLE=1` and terminate TLS
+  at a reverse proxy (nginx, Caddy, Traefik, or a cloud load balancer).
+- Write tools are off unless enabled at setup, default to `dry_run=true`,
+  and are recorded in `/data/audit.jsonl`.
 
 ## Out of scope
 
