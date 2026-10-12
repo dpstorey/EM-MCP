@@ -1,58 +1,58 @@
-## Enterprise Manager version of John Walley's Tenable OT MCP
+# Tenable OT MCP, Enterprise Manager edition
 
-**Version**: 0.5.3 (based on GitLab tenable-ot-mcp v0.4.5)  
-**Upstream**: https://gitlab.com/jwalley/tenable-ot-mcp  
-**Modified**: 2026-08-24
+An MCP server that exposes [Tenable OT Security](https://www.tenable.com/products/tenable-ot)
+to AI clients through Enterprise Manager (EM), with site routing, guarded write
+tools and policy-creation tools. The server lives in [`tenable-ot-mcp/`](tenable-ot-mcp/);
+start with its [README](tenable-ot-mcp/README.md) for install, setup and the tool reference.
 
-### EM-Specific Enhancements
+> [!NOTE]
+> **Use this repository, not the original project.** This is a fork of
+> [`tenable-ot-mcp` by John Walley / OneClearPath, Incorporated](https://gitlab.com/jwalley/tenable-ot-mcp)
+> (Apache-2.0), who deserve the credit for the original server. It has diverged,
+> and the skills here depend on features that do not exist upstream. **Do not pull
+> the upstream container image or clone the upstream repository to use with this
+> one.** Build from this repository.
 
-- **Site routing**: All query tools support `site_uuid` / `site_name` parameters for EM relay
-- **Short descriptions**: Reduced tool descriptions for faster MCP tool loading
-- **Machine ID caching**: Automatic site name → machine ID resolution and caching
-- **EM root queries**: `list_paired_icps` bypasses relay, queries EM directly
-- **Subnet queries**: Assets can be queried by subnet, e.g. 10.253.10.128/25
-- **Findings**: Vulnerability and policy findings can be queried
+## Branches
 
-### Quick Start
+| Branch | Use it for |
+|:---:|:---|
+| [`main`](https://github.com/dpstorey/EM-MCP/tree/main) | The full tool set, including the attackers-view tools. |
+| [`small-model`](https://github.com/dpstorey/EM-MCP/tree/small-model) | A lighter build for small local models, where shorter tool schemas and fewer registered tools work more reliably. Same server and policy-creation tools, without the attackers-view tools. |
 
-Build the container:
-```bash 
-docker compose up -d --build --force-recreate tenable-ot
-```
-Verify
+Both branches run the same CI (pytest on Python 3.12 and 3.13).
+
+## EM-specific features
+
+- **Site routing:** site-scoped tools accept `site_uuid` / `site_name` for EM relay;
+  writes require exactly one explicit site.
+- **Machine ID caching:** site names resolve to machine ids automatically and are cached.
+- **EM root queries:** `list_paired_icps` queries EM directly.
+- **Subnet queries:** assets can be queried by subnet, for example `10.253.10.128/25`.
+- **Findings:** vulnerability and policy findings can be queried.
+- **Policy creation:** narrow `create_*_policy` tools, one per policy type, so small models see short schemas.
+- **Short tool descriptions** for faster tool loading.
+
+## Quick start
+
 ```bash
+docker compose up -d --build --force-recreate tenable-ot
 docker compose ps tenable-ot
 docker compose logs --tail=100 tenable-ot
 ```
-Suggested agent prompts are available in `prompt/`. Some smaller MOE models require more reinforcement.
 
-The `prompt/` directory provides a simple unified prompt for smaller models such as Holo and Qwen 3.6-35B-A3B. Newer models such as Qwen 3.8-flash-next and Qwen 3.8-27B, as well as larger models such as Mistral-Medium-3.5-128, Claude and ChatGPT, can make use of the additional skills in `~/skills`.
+Then follow the setup steps in [`tenable-ot-mcp/README.md`](tenable-ot-mcp/README.md).
+Suggested agent prompts are in `prompt/`; some smaller MoE models need more reinforcement.
 
-### Tool List
-A categorized tool list document is available in file `tot-mcp-tool-list.md`.
+## More
 
-### Example Session
-EXAMPLE_SESSION.md is a transcript of an example session with a Tenable OT system using demonstration data and a locally executing LLM (HCompany's Holo-35B-A3B) running on 2 Nvidia A6000's - it will give you a good sense of the capabilities of the MCP.
+- **Tool list:** [`tot-mcp-tool-list.md`](tot-mcp-tool-list.md) and [`tenable-ot-mcp/docs/TOOL_CATALOG.md`](tenable-ot-mcp/docs/TOOL_CATALOG.md).
+- **Example session:** [`EXAMPLE_SESSION.md`](EXAMPLE_SESSION.md), a transcript against demonstration data with a locally run LLM (HCompany Holo-35B-A3B on two Nvidia A6000s).
+- **Skills:** task workflows in [`skills/`](skills/). The IEC 62443 zones-and-conduits skill is also published at [T1OTE_IEC62443](https://github.com/dpstorey/T1OTE_IEC62443).
+- **Changes:** [`tenable-ot-mcp/CHANGELOG.md`](tenable-ot-mcp/CHANGELOG.md).
+- **Security and contributing:** [`SECURITY.md`](tenable-ot-mcp/SECURITY.md), [`CONTRIBUTING.md`](tenable-ot-mcp/CONTRIBUTING.md).
 
-### Recent Updates (v0.5.0)
+## License
 
-- Updated to upstream v0.4.5 baseline
-- Added field selection infrastructure for vulnerability queries (reduces bandwidth)
-- Version synchronization with upstream releases
-
-
-
-### T1OTE Skills
-
-Skills live in `skills/production/` (released) and `skills/staging/` (work in progress). Live copies are served from the LibreChat `skill/` folder and must match production.
-
-| Skill | Loading | Purpose |
-|---|---|---|
-| `T1OTE-core-identity-and-routing` | always-apply | Identity, tool map, code-tool rules, skill loading order |
-| `T1OTE-raise-fatality-flag` | always-apply | RAISE table via `raise_table.py` in `run_tools_with_bash` (`query_assets` only, `tool_manifest` as its own argument) |
-| `T1OTE-asset-event-search-patterns` | always-apply | Asset and event search patterns |
-| `T1OTE-attackers-view-diagram` | on demand | Attacker's view: counts and table are copied from the tool result, never recounted; RAISE grades come from the step 2 table (`get_asset` only for assets not in it); `force_through=true` when the user says to continue through no-path assets; Mermaid diagram pasted verbatim |
-| `T1OTE-detailed-profile-and-analysis` | on demand | Detailed asset profile and analysis |
-| `T1OTE-report-generation` | on demand | `asset_inventory` and `vulnerability_findings` reports; no discovery calls; always RAISE risk-grade columns |
-
-Promote a skill by moving its folder from `staging/` to `production/` and syncing the live copy.
+Apache 2.0. See [`LICENSE`](LICENSE) and [`tenable-ot-mcp/NOTICE`](tenable-ot-mcp/NOTICE).
+Independent project, not affiliated with, endorsed by, or sponsored by Tenable, Inc.
