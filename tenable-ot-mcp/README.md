@@ -27,6 +27,13 @@ Maintained by Dom Storey. Issues and pull requests belong on this repository's t
 > [CHANGELOG.md](CHANGELOG.md). Please report bugs, with steps to reproduce, on
 > the [issue tracker](https://github.com/dpstorey/EM-MCP/issues).
 
+> [!TIP]
+> **Branches.** `main` is the full tool set, including the attackers-view tools.
+> For small local models, where shorter tool schemas and fewer registered tools
+> work more reliably, use the
+> [`small-model`](https://github.com/dpstorey/EM-MCP/tree/small-model) branch:
+> the same server and policy-creation tools without the attackers-view tools.
+
 ---
 
 ## What this is
