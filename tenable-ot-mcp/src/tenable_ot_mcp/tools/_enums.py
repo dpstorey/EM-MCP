@@ -380,7 +380,13 @@ def to_asset_type_setter(natural: str) -> str:
 # without an entry here. Add a row only where the label differs from the
 # enum in letters. Copy labels from the UI's Type filter dropdown.
 _ASSET_TYPE_LABELS: dict[str, str] = {
+    # Only labels that differ from the enum name beyond case/spacing need a row.
     "Bms": "BMS Controller",
+    "Cp": "Communication Module",
+    "Eng": "Engineering Station",
+    "Io": "I/O Module",
+    "ThreeDPrinter": "3D Printer",
+    "Unknown": "Endpoint",
 }
 
 

@@ -15,6 +15,14 @@ from tenable_ot_mcp.tools._enums import normalize_filter_types, resolve_asset_ty
         ("bms controller", "Bms"),
         ("Backplane Module", "BackplaneModule"),
         ("CNC", "Cnc"),
+        ("Communication Module", "Cp"),
+        ("Engineering Station", "Eng"),
+        ("I/O Module", "Io"),
+        ("3D Printer", "ThreeDPrinter"),
+        ("Endpoint", "Unknown"),
+        ("File server", "FileServer"),
+        ("Serial-Ethernet Bridge", "SerialEthernetBridge"),
+        ("Tenable EM", "TenableEm"),
     ],
 )
 def test_resolve_enum_or_label(given, expected):
