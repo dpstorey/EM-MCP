@@ -24,12 +24,12 @@ RUN pip wheel --wheel-dir /wheels .
 # ---------- Stage 2: runtime ----------
 FROM python:3.12.7-slim-bookworm
 
-LABEL org.opencontainers.image.title="Tenable OT MCP Server"
 LABEL org.opencontainers.image.description="Open-source MCP server exposing Tenable OT Security data to AI clients."
 LABEL org.opencontainers.image.licenses="Apache-2.0"
-LABEL org.opencontainers.image.source="https://gitlab.com/jwalley/tenable-ot-mcp"
-LABEL org.opencontainers.image.authors="John Walley <jwalley@1clearpath.com>"
-LABEL org.opencontainers.image.vendor="OneClearPath, Incorporated"
+LABEL org.opencontainers.image.title="Tenable OT MCP Server (Enterprise Manager edition)"
+LABEL org.opencontainers.image.source="https://github.com/dpstorey/EM-MCP"
+LABEL org.opencontainers.image.url="https://github.com/dpstorey/EM-MCP"
+LABEL org.opencontainers.image.authors="Dom Storey (fork); original by John Walley, OneClearPath, Incorporated"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

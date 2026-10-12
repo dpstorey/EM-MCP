@@ -209,7 +209,7 @@ async def well_known_protected_resource(request: Request) -> JSONResponse:
             "resource": f"{base}/mcp",
             "authorization_servers": [],
             "bearer_methods_supported": ["header"],
-            "resource_documentation": "https://gitlab.com/jwalley/tenable-ot-mcp",
+            "resource_documentation": "https://github.com/dpstorey/EM-MCP",
         }
     )
 

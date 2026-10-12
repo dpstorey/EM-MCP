@@ -50,9 +50,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://gitlab.com/jwalley/tenable-ot-mcp"
-Repository = "https://gitlab.com/jwalley/tenable-ot-mcp"
-Issues = "https://gitlab.com/jwalley/tenable-ot-mcp/-/issues"
+Homepage = "https://github.com/dpstorey/EM-MCP"
+Repository = "https://github.com/dpstorey/EM-MCP"
+Issues = "https://github.com/dpstorey/EM-MCP/issues"
+Upstream = "https://gitlab.com/jwalley/tenable-ot-mcp"
 
 [project.scripts]
 tenable-ot-mcp = "tenable_ot_mcp.main:cli"
