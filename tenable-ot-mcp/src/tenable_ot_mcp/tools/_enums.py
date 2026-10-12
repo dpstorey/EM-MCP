@@ -186,6 +186,10 @@ _ASSET_KIND: dict[str, list[str]] = {
     "medical": ["MedicalDevice"],
     "panel": ["Panel"],
     "storage": ["StorageDevice"],
+    # Not yet positively classified. Tenable's UI calls this type "Endpoint";
+    # the enum value is `Unknown`. Used for classification-quality checks.
+    "endpoint": ["Unknown"],
+    "unclassified": ["Unknown"],
 }
 
 ASSET_KIND_VALUES = list(_ASSET_KIND)
