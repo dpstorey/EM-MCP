@@ -3,3 +3,4 @@ tenable-ot-mcp-data/
 .env
 
 .venv/ # keep venvs out of git
+.venv/
