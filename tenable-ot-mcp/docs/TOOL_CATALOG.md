@@ -60,6 +60,8 @@ recorded in `/data/audit.jsonl`.
 | Tool | One-line purpose |
 |---|---|
 | `list_detection_policies` | List configured detection policies with category, enabled flag, paused flag, level, fired-event counts (last 24h / 7d / 30d). Category/enabled/paused/search filter client-side (Tenable's `policies` query has no server-side filter); the tool fetches additional pages internally to try to fill `limit`, capped at 10 page-fetches per call. |
+| `get_policy` | Fetch one detection policy by id (title, level, enabled flag, event details). |
+| `describe_policy_type` | List the supported policy types, or the arguments and valid events for one. No network call. |
 | `query_policy_findings` | Per-asset findings (the rows of `policy × asset × hit-count`) filtered by policy / status / severity / time / MITRE technique / plugin id — all server-side. Supports `after`/`after_by_site` pagination. |
 
 ### Network topology
@@ -296,6 +298,17 @@ visible to paired ICPs).
 | `enable_detection_policy` | Turn one detection policy back on. | Low |
 | `disable_detection_policy` | Turn one detection policy off. **Disables detection coverage** — review blast radius first. | **HIGH** |
 | `archive_detection_policy` | Archive (effectively delete) a detection policy. Past findings remain queryable. Irreversible. | **HIGH** |
+| `create_conversation_policy` | Unauthorized-conversation policy: protocol policy alerting on src to dst conversations (optionally negated protocol group). `initial_state=disabled` creates then disables (two calls). Defaults to dry run. | Medium |
+| `create_activity_policy` | Engineering-activity policy (downloads, uploads, start/stop...) between src and dst. `initial_state=disabled` creates then disables (two calls). Defaults to dry run. | Medium |
+| `create_asset_policy` | Asset-change policy (new asset, inactive, firmware change...). `initial_state=disabled` creates then disables (two calls). Defaults to dry run. | Medium |
+| `create_port_policy` | Open-port policy against a port group. `initial_state=disabled` creates then disables (two calls). Defaults to dry run. | Medium |
+| `create_ids_src_dst_policy` | IDS-event policy between src and dst. `initial_state=disabled` creates then disables (two calls). Defaults to dry run. | Medium |
+| `create_ids_general_policy` | IP-conflict policy. `initial_state=disabled` creates then disables (two calls). Defaults to dry run. | Medium |
+| `create_intrusion_policy` | Intrusion-rule policy between src and dst. `initial_state=disabled` creates then disables (two calls). Defaults to dry run. | Medium |
+| `create_spike_policy` | Data-volume / conversation-count spike policy. `initial_state=disabled` creates then disables (two calls). Defaults to dry run. | Medium |
+| `create_rediscovered_asset_policy` | Asset reappearing after inactivity. `initial_state=disabled` creates then disables (two calls). Defaults to dry run. | Medium |
+| `create_tag_value_policy` | Unauthorized controller tag write policy. `initial_state=disabled` creates then disables (two calls). Defaults to dry run. | Medium |
+| `update_policy` | Full replace of an existing policy via `set*Policy`. Read it first with `get_policy`. Defaults to dry run. | Medium |
 | `enable_detection_policies` | Bulk enable. | Low |
 | `disable_detection_policies` | Bulk disable. **Disables detection coverage.** | **HIGH** |
 | `archive_detection_policies` | Bulk archive. Irreversible. | **HIGH** |
