@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Asset-type filters on `create_asset_group` / `update_asset_group` accept the Tenable UI display
+  labels (for example `BMS Controller`) as well as enum names (`Bms`); matching is case- and
+  separator-insensitive, and unknown types return "did you mean" suggestions.
 - Ten narrow policy-creation tools, one per Tenable OT policy type, over a shared registry:
   `create_conversation_policy` (protocol policy, `Conversation` event; the unauthorized-conversation
   policy), `create_activity_policy`, `create_asset_policy`, `create_port_policy`,
