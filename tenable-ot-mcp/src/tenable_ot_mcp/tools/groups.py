@@ -42,6 +42,7 @@ from typing import Any
 
 from ..audit import AuditLog
 from ..tenable_client import TenableClient
+from ._enums import normalize_filter_types
 from ._shared import clamp_page_size, unwrap_nodes
 from ._sites import SiteScopedWriteMCP, run_site_read
 
@@ -2096,7 +2097,7 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             payload["vlan"] = vlan
             return "Segment", payload
         if filter_ is not None:
-            payload["filter"] = filter_
+            payload["filter"] = normalize_filter_types(filter_)
             return "Filter", payload
         # No membership specified — default to an empty Filter the AI can
         # populate later via update_asset_group.
@@ -2116,8 +2117,9 @@ def register_write_tools(mcp: Any, client: TenableClient, audit: AuditLog) -> No
             "  • `asset_type` + `family`: Tenable AssetType + family "
             "string → TypeFamily\n"
             "  • `vlan`: a VLAN identifier → Segment\n"
-            "  • `filter`: raw AssetGroupExpressionsParams expression → "
-            "Filter\n"
+            "  • `filter`: AssetGroupExpressionsParams expression → Filter. "
+            "On a `type` field, values may be Tenable enum names or the "
+            "labels shown in the UI (e.g. `Bms` or `BMS Controller`)\n"
             "If none are given, defaults to an empty Filter group the AI "
             "can populate later.\n\n"
             "WRITE. Defaults to dry_run."

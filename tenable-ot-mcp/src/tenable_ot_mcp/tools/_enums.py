@@ -15,6 +15,10 @@ words instead of vendor-specific PascalCase. See
 
 from __future__ import annotations
 
+import difflib
+import re
+from typing import Any
+
 # ---------------------------------------------------------------------------
 # Filter operators (Tenable's `ExprOp` enum)
 # ---------------------------------------------------------------------------
@@ -366,6 +370,73 @@ def to_asset_type_setter(natural: str) -> str:
             f"{USER_DEFINED_ASSET_TYPE_VALUES} (case- and separator-insensitive)"
         )
     return _NORMALIZED_ASSET_TYPE_MAP[key]
+
+
+# UI display labels that are NOT just the enum name split into words. The
+# Tenable OT UI shows labels ("BMS Controller") while the API wants enum
+# values ("Bms"); users and models type what they see. Case, spaces,
+# underscores, hyphens and slashes are ignored when matching, so
+# "Backplane Module", "backplane_module" and "BackplaneModule" all resolve
+# without an entry here. Add a row only where the label differs from the
+# enum in letters. Copy labels from the UI's Type filter dropdown.
+_ASSET_TYPE_LABELS: dict[str, str] = {
+    "Bms": "BMS Controller",
+}
+
+
+def _label_key(s: str) -> str:
+    """Matching key: lowercase letters and digits only."""
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+_ASSET_TYPE_LOOKUP: dict[str, str] = {}
+for _v in _USER_DEFINED_ASSET_TYPES:
+    _ASSET_TYPE_LOOKUP[_label_key(_v)] = _v
+for _alias, _target in _USER_DEFINED_ASSET_TYPE_ALIASES.items():
+    _ASSET_TYPE_LOOKUP.setdefault(_label_key(_alias), _target)
+for _enum_value, _label in _ASSET_TYPE_LABELS.items():
+    _ASSET_TYPE_LOOKUP.setdefault(_label_key(_label), _enum_value)
+
+
+def resolve_asset_type_name(name: str) -> str:
+    """Resolve an asset type given as an enum value OR as the UI display label.
+
+    Accepts "Bms" and "BMS Controller" alike, ignoring case and separators.
+    Raises ValueError listing the closest valid enum values when nothing
+    matches, so a model can correct itself in one step.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("asset type must be a non-empty string")
+    key = _label_key(name)
+    if key in _ASSET_TYPE_LOOKUP:
+        return _ASSET_TYPE_LOOKUP[key]
+    close = difflib.get_close_matches(key, list(_ASSET_TYPE_LOOKUP), n=5, cutoff=0.6)
+    hints = sorted({_ASSET_TYPE_LOOKUP[c] for c in close})
+    msg = f"unknown asset type {name!r}"
+    if hints:
+        msg += f"; did you mean one of {hints}?"
+    msg += " Use an enum value or the label shown in the Tenable OT UI Type filter."
+    raise ValueError(msg)
+
+
+def normalize_filter_types(node: Any) -> Any:
+    """Return a copy of an asset-group filter expression with every
+    `type` value resolved to Tenable's enum spelling.
+
+    Walks nested And/Or expressions. Expressions on other fields, and any
+    shape it does not recognise, pass through unchanged.
+    """
+    if isinstance(node, list):
+        return [normalize_filter_types(n) for n in node]
+    if not isinstance(node, dict):
+        return node
+    out = {k: normalize_filter_types(v) if k == "expressions" else v for k, v in node.items()}
+    if str(node.get("field", "")).lower() in ("type", "assettype"):
+        for key in ("values", "value"):
+            if key in out:
+                v = out[key]
+                out[key] = [resolve_asset_type_name(x) for x in v] if isinstance(v, list) else resolve_asset_type_name(v)
+    return out
 
 
 # UserDefinedPurdueLevel — narrower than the filter PurdueLevel (no Level3_5 / Level5)
