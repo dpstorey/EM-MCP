@@ -351,6 +351,5 @@ Original server: Copyright 2026 OneClearPath, Incorporated, by John Walley
 are by Dom Storey under the same license. The upstream project is a separate
 codebase and is not required, and not recommended, for running this one.
 
-This is an independent open-source project and is not affiliated with, endorsed
-by, or sponsored by Tenable, Inc. "Tenable" and "Tenable OT Security" are
+This is a community open-source project provided as-is. It is not an officially supported Tenable product. "Tenable" and "Tenable OT Security" are
 trademarks of Tenable, Inc.

@@ -55,4 +55,4 @@ Suggested agent prompts are in `prompt/`; some smaller MoE models need more rein
 ## License
 
 Apache 2.0. See [`LICENSE`](LICENSE) and [`tenable-ot-mcp/NOTICE`](tenable-ot-mcp/NOTICE).
-Independent project, not affiliated with, endorsed by, or sponsored by Tenable, Inc.
+Community project, provided as-is; not an officially supported Tenable product.
