@@ -6,7 +6,7 @@ Author: John Walley <jwalley@1clearpath.com>.
 
 This is a modified fork of the upstream Tenable OT MCP Server
 (https://gitlab.com/jwalley/tenable-ot-mcp). Modifications and additions
-Copyright 2026 Dominic Storey <dstorey@barossafarm.com>.
+Copyright (c) 2026 Tenable, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this software except in compliance with the License.
