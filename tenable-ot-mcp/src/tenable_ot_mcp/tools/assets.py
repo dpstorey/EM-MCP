@@ -15,11 +15,12 @@ values before the GraphQL goes out.
 from __future__ import annotations
 
 import ipaddress
+import json
 import time
 from typing import Any
 
 from ..audit import AuditLog
-from ..tenable_client import TenableClient
+from ..tenable_client import TenableClient, TenableError
 from ._enums import (
     ASSET_KIND_VALUES,
     CRITICALITY_VALUES,
@@ -64,6 +65,10 @@ _ASSET_BASE = """
   lastSeen
   lastUpdate
   lifecycleStatus
+  hardwareState
+  discontinuedDate
+  replacementProduct
+  serial
   ips(first: 50) { nodes }
   macs(first: 50) { nodes }
   segments(first: 50) { nodes { id name type } }
@@ -176,6 +181,52 @@ _QUERY_ASSETS = (
 
 # Single-asset fetch via the dedicated `asset(id: ID!)` query.
 _GET_ASSET = "query Q($id: ID!) { asset(id: $id) { " + _ASSET_BASE + " } }"
+
+# Backplane (chassis) membership for one asset, confirmed against live
+# schema introspection: `Asset.backplane: Backplane { id name size
+# assets(onlyMembers, first, after): AssetConnection }`. The schema exposes
+# slot number lives on the member asset itself (`Asset.slot`).
+# Kept as a SEPARATE query from `_GET_ASSET` so a schema difference on an
+# older deployment can never break the core `get_asset` result.
+_GET_ASSET_BACKPLANE = """
+query Q($id: ID!, $pageSize: Int!) {
+  asset(id: $id) {
+    backplane {
+      id
+      name
+      size
+      assets(first: $pageSize, onlyMembers: true) {
+        totalCount
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          name
+          type
+          vendor
+          model
+          firmwareVersion
+          slot
+          serial
+          hardwareState
+          ips(first: 10) { nodes }
+        }
+      }
+    }
+  }
+}
+"""
+
+_BACKPLANE_PAGE_SIZE = 100
+
+# Host details (WMI / OT-agent / SNMP collected data). `Asset.details` is a
+# JSON scalar holding hardware, USB, Windows OS/hotfix/software and SNMP
+# blocks. It is large (installed software alone can be ~400 entries, and
+# the blob repeats it in a UI-table form), so it is NEVER added to
+# `_ASSET_BASE` (that would bloat every `query_assets` row) and is fetched
+# only by `get_asset`, soft-failing like the backplane query.
+_GET_ASSET_DETAILS = "query Q($id: ID!) { asset(id: $id) { details } }"
+
+_HOST_INCLUDE_VALUES = frozenset({"software", "hotfixes", "network_ports"})
 
 # Vulnerabilities for one asset — traverse asset(id).plugins so the
 # public UUID resolves correctly. The top-level plugins(affectedAssets)
@@ -320,6 +371,10 @@ def _project_asset(
         "last_seen": node.get("lastSeen"),
         "last_update": node.get("lastUpdate"),
         "lifecycle_status": node.get("lifecycleStatus"),
+        "hardware_state": _decode_hardware_state(node.get("hardwareState")),
+        "discontinued_date": node.get("discontinuedDate"),
+        "replacement_product": node.get("replacementProduct"),
+        "serial": node.get("serial"),
         "hidden": node.get("hidden"),
         "ips": unwrap_nodes(node.get("ips")),
         "macs": unwrap_nodes(node.get("macs")),
@@ -335,6 +390,165 @@ def _project_asset(
         "location": node.get("location"),
         "custom_fields": custom_fields,
     }
+
+
+# `HardwareState` enum (Tenable lifecycle status of the hardware model).
+# `UnknownState` is surfaced as None — the Tenable UI shows it as a blank
+# cell, and "unknown" is more useful to a consumer as an absent value.
+_HARDWARE_STATE_LABELS = {
+    "Active": "Active",
+    "EndOfLife": "End Of Life",
+    "Discontinued": "Discontinued",
+    "UnknownState": None,
+}
+
+
+def _decode_hardware_state(raw: Any) -> str | None:
+    if raw in (None, ""):
+        return None
+    # Unrecognised future enum values pass through rather than vanish.
+    return _HARDWARE_STATE_LABELS.get(raw, str(raw))
+
+
+def _project_backplane(block: Any) -> dict[str, Any] | None:
+    """Flatten `Asset.backplane` into {id, name, size, modules[]}.
+
+    Returns None when the asset is not on a backplane (standalone device,
+    or a type that never has one) so callers can tell "no backplane" from
+    "empty backplane". `modules` are ordered by `Asset.slot`, with
+    slot-less members last.
+    """
+    if not block:
+        return None
+    members = block.get("assets") or {}
+    page_info = members.get("pageInfo") or {}
+    return {
+        "id": block.get("id"),
+        "name": block.get("name"),
+        "size": block.get("size"),
+        "module_count": members.get("totalCount"),
+        "has_more": bool(page_info.get("hasNextPage")),
+        "modules": sorted(
+            (
+            {
+                "slot": n.get("slot"),
+                "asset_id": n.get("id"),
+                "name": n.get("name"),
+                "type": n.get("type"),
+                "vendor": n.get("vendor"),
+                "model": n.get("model"),
+                "firmware_version": n.get("firmwareVersion"),
+                "serial": n.get("serial"),
+                "hardware_state": _decode_hardware_state(n.get("hardwareState")),
+                "ips": unwrap_nodes(n.get("ips")),
+            }
+            for n in unwrap_nodes(members)
+            ),
+            key=lambda m: (m["slot"] is None, m["slot"] or 0),
+        ),
+    }
+
+
+def _gb(n: Any) -> float | None:
+    return round(n / 1024**3, 1) if isinstance(n, (int, float)) and not isinstance(n, bool) else None
+
+
+def _project_host_details(details: Any, include: frozenset[str] = frozenset()) -> dict[str, Any] | None:
+    """Compact projection of `Asset.details` for hosts that reported
+    hardware / OS data (WMI, OT agent, SNMP).
+
+    Always returned: hardware summary, drives, USB devices, Windows OS
+    identity, hotfix/software *counts* and the 5 most recent hotfixes, SNMP
+    sysinfo. Full `hotfixes`, `software` and `network_ports` lists only when
+    named in `include` — they are long and mostly noise for triage.
+    Deliberately omitted: the registered Windows user and the SNMP contact
+    name (personal data), and the UI-table duplicates of the same lists.
+    Returns None for assets with none of these blocks (PLCs, switches, ...).
+    """
+    if isinstance(details, str):
+        try:
+            details = json.loads(details)
+        except ValueError:
+            return None
+    if not isinstance(details, dict):
+        return None
+    hw = details.get("hardware") or {}
+    win = details.get("windows") or {}
+    usb = details.get("usb") or []
+    snmp = {k: v for k, v in (details.get("snmp") or {}).items() if k != "Contact Name"}
+    if not (hw or win or usb or snmp):
+        return None
+
+    out: dict[str, Any] = {
+        "wmi_reported": "Wmi" in {n.get("source") for n in details.get("names") or []},
+        "hardware": {
+            "manufacturer": hw.get("csManufacturer"),
+            "model": hw.get("csModel"),
+            "cpu": hw.get("cpu"),
+            "cpu_speed_mhz": hw.get("cpuSpeed"),
+            "cpu_architecture": hw.get("cpuArchitecture"),
+            "processors": hw.get("numOfProcessors"),
+            "memory_total_gb": _gb(hw.get("totalPhysicalMemory")),
+            "bios_version": hw.get("biosVersion"),
+            "bios_serial": hw.get("biosSerial"),
+            "drives": [
+                {
+                    "drive_letter": d.get("driveLetter") or None,
+                    "name": d.get("name") or None,
+                    "device_type": d.get("deviceType"),
+                    "capacity_gb": _gb(d.get("capacity")),
+                }
+                for d in hw.get("devicesAndDrives") or []
+            ],
+        }
+        if hw
+        else None,
+        "usb_devices": [
+            {"name": u.get("name"), "pnp_device_id": u.get("pnpDeviceId")} for u in usb
+        ],
+        "snmp": snmp or None,
+    }
+    if win:
+        hotfixes = win.get("hotFixes") or []
+        software = win.get("installedSoftware") or []
+        recent = sorted(hotfixes, key=lambda h: h.get("installedOn") or "", reverse=True)
+        windows: dict[str, Any] = {
+            "os_name": win.get("osName"),
+            "version": win.get("version"),
+            "build_number": win.get("buildNumber"),
+            "build_type": win.get("buildType"),
+            "architecture": win.get("osArchitecture"),
+            "domain_or_workgroup": win.get("csDomain"),
+            "hotfix_count": len(hotfixes),
+            "latest_hotfixes": [
+                {"id": h.get("hotFixId"), "installed_on": h.get("installedOn"),
+                 "description": h.get("description")}
+                for h in recent[:5]
+            ],
+            "software_count": len(software),
+        }
+        if "hotfixes" in include:
+            windows["hotfixes"] = [
+                {"id": h.get("hotFixId"), "installed_on": h.get("installedOn"),
+                 "description": h.get("description")}
+                for h in recent
+            ]
+        if "software" in include:
+            windows["installed_software"] = [
+                {"name": x.get("name"), "version": x.get("version"),
+                 "install_date": x.get("installDate")}
+                for x in software
+            ]
+        out["windows"] = windows
+    else:
+        out["windows"] = None
+    if "network_ports" in include:
+        out["network_ports"] = [
+            {k: p.get(k) for k in ("name", "alias", "description", "type", "mac",
+                                   "adminStatus", "operStatus")}
+            for p in details.get("networkPorts") or []
+        ]
+    return out
 
 
 def _qualify_asset(asset: dict[str, Any], site_uuid: str) -> dict[str, Any]:
@@ -494,8 +708,14 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         description=(
             "Returns the per-asset bundle for one OT asset by id: "
             "identity, classification, IPs / MACs, Purdue level, "
-            "segment membership, criticality, run status, and aggregate "
-            "risk. Call after `query_assets` returns an id of interest. "
+            "segment membership, criticality, run status, aggregate "
+            "risk, and — for controllers / chassis-based devices — the "
+            "`backplane` module list (slot, name, type, model, firmware, "
+            "asset id per module; null when the asset has no backplane), and "
+            "for hosts that reported WMI / agent data a `host` block "
+            "(hardware, drives, USB, Windows OS, hotfix and software "
+            "counts; pass include=[\"software\", \"hotfixes\"] for the "
+            "full lists). Call after `query_assets` returns an id of interest. "
             "For the asset's open vulnerabilities call "
             "`get_asset_vulnerabilities` separately."
         ),
@@ -504,6 +724,7 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         asset_id: str,
         site_uuid: str | None = None,
         site_name: str | None = None,
+        include: list[str] | None = None,
     ) -> dict[str, Any]:
         """Fetch one asset by id.
 
@@ -512,9 +733,19 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             site_uuid: Site machine-id UUID. Provide this or `site_name`.
             site_name: Site name to resolve to machine-id UUID. Provide
                 this or `site_uuid`.
+            include: Optional extra detail lists for hosts with WMI /
+                agent data, any of "software", "hotfixes", "network_ports".
+                Omit for the compact summary (counts + recent hotfixes).
         """
         if not asset_id:
             raise ValueError("asset_id is required")
+        wanted = frozenset(include or [])
+        unknown = wanted - _HOST_INCLUDE_VALUES
+        if unknown:
+            raise ValueError(
+                f"unknown include value(s) {sorted(unknown)}; "
+                f"allowed: {sorted(_HOST_INCLUDE_VALUES)}"
+            )
         machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
         data = await client.query(
             _GET_ASSET,
@@ -525,7 +756,31 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         if not node:
             return {"asset": None, "error": f"No asset with id {asset_id!r}."}
         label_map = await CustomFieldLabelCache.get_or_fetch(client, icp_machine_id=machine_id)
-        return {"asset": _qualify_asset(_project_asset(node, label_map), machine_id)}
+        asset = _qualify_asset(_project_asset(node, label_map), machine_id)
+        # Backplane is best-effort: a schema mismatch or an asset type
+        # without a backplane must not fail the whole call.
+        try:
+            bp_data = await client.query(
+                _GET_ASSET_BACKPLANE,
+                variables={"id": asset_id, "pageSize": _BACKPLANE_PAGE_SIZE},
+                icp_machine_id=machine_id,
+            )
+            asset["backplane"] = _project_backplane((bp_data.get("asset") or {}).get("backplane"))
+        except TenableError as exc:
+            asset["backplane"] = None
+            asset["backplane_error"] = str(exc)[:300]
+        # Host details (hardware / Windows / USB / SNMP), also best-effort.
+        try:
+            det = await client.query(
+                _GET_ASSET_DETAILS,
+                variables={"id": asset_id},
+                icp_machine_id=machine_id,
+            )
+            asset["host"] = _project_host_details((det.get("asset") or {}).get("details"), wanted)
+        except TenableError as exc:
+            asset["host"] = None
+            asset["host_error"] = str(exc)[:300]
+        return {"asset": asset}
 
     @mcp.tool(
         title="Get vulnerabilities for one asset",
