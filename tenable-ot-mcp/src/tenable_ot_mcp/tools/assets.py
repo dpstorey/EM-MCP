@@ -186,6 +186,9 @@ _GET_ASSET = "query Q($id: ID!) { asset(id: $id) { " + _ASSET_BASE + " } }"
 # schema introspection: `Asset.backplane: Backplane { id name size
 # assets(onlyMembers, first, after): AssetConnection }`. The schema exposes
 # slot number lives on the member asset itself (`Asset.slot`).
+# `onlyMembers: false` is required: with `true` the controller (slot 0) is
+# treated as the chassis owner and omitted — confirmed against a live PLC
+# where only the I/O module came back.
 # Kept as a SEPARATE query from `_GET_ASSET` so a schema difference on an
 # older deployment can never break the core `get_asset` result.
 _GET_ASSET_BACKPLANE = """
@@ -195,7 +198,7 @@ query Q($id: ID!, $pageSize: Int!) {
       id
       name
       size
-      assets(first: $pageSize, onlyMembers: true) {
+      assets(first: $pageSize, onlyMembers: false) {
         totalCount
         pageInfo { hasNextPage endCursor }
         nodes {
@@ -453,7 +456,17 @@ def _gb(n: Any) -> float | None:
     return round(n / 1024**3, 1) if isinstance(n, (int, float)) and not isinstance(n, bool) else None
 
 
-def _project_host_details(details: Any, include: frozenset[str] = frozenset()) -> dict[str, Any] | None:
+_SOFTWARE_PAGE_DEFAULT = 100
+_SOFTWARE_PAGE_MAX = 200
+
+
+def _project_host_details(
+    details: Any,
+    include: frozenset[str] = frozenset(),
+    software_offset: int = 0,
+    software_limit: int = _SOFTWARE_PAGE_DEFAULT,
+    software_search: str | None = None,
+) -> dict[str, Any] | None:
     """Compact projection of `Asset.details` for hosts that reported
     hardware / OS data (WMI, OT agent, SNMP).
 
@@ -534,11 +547,16 @@ def _project_host_details(details: Any, include: frozenset[str] = frozenset()) -
                 for h in recent
             ]
         if "software" in include:
+            needle = (software_search or "").strip().lower()
+            matched = [x for x in software if needle in (x.get("name") or "").lower()]
+            end = software_offset + software_limit
             windows["installed_software"] = [
                 {"name": x.get("name"), "version": x.get("version"),
                  "install_date": x.get("installDate")}
-                for x in software
+                for x in matched[software_offset:end]
             ]
+            windows["software_match_count"] = len(matched)
+            windows["software_next_offset"] = end if end < len(matched) else None
         out["windows"] = windows
     else:
         out["windows"] = None
@@ -715,7 +733,9 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             "for hosts that reported WMI / agent data a `host` block "
             "(hardware, drives, USB, Windows OS, hotfix and software "
             "counts; pass include=[\"software\", \"hotfixes\"] for the "
-            "full lists). Call after `query_assets` returns an id of interest. "
+            "lists — software is paged via software_offset / software_limit "
+            "and filterable with software_search, so a 400+ entry host never "
+            "exceeds the response cap). Call after `query_assets` returns an id of interest. "
             "For the asset's open vulnerabilities call "
             "`get_asset_vulnerabilities` separately."
         ),
@@ -725,6 +745,9 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
         site_uuid: str | None = None,
         site_name: str | None = None,
         include: list[str] | None = None,
+        software_offset: int = 0,
+        software_limit: int = _SOFTWARE_PAGE_DEFAULT,
+        software_search: str | None = None,
     ) -> dict[str, Any]:
         """Fetch one asset by id.
 
@@ -736,6 +759,13 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
             include: Optional extra detail lists for hosts with WMI /
                 agent data, any of "software", "hotfixes", "network_ports".
                 Omit for the compact summary (counts + recent hotfixes).
+            software_offset: With include=["software"], index to start the
+                software list at. Use the returned `software_next_offset`
+                to fetch the next page; it is null on the last page.
+            software_limit: Page size for the software list (1-200,
+                default 100).
+            software_search: Case-insensitive substring filter on software
+                name, applied before paging (e.g. "tightvnc", "wireshark").
         """
         if not asset_id:
             raise ValueError("asset_id is required")
@@ -746,6 +776,10 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 f"unknown include value(s) {sorted(unknown)}; "
                 f"allowed: {sorted(_HOST_INCLUDE_VALUES)}"
             )
+        if software_offset < 0:
+            raise ValueError("software_offset must be >= 0")
+        if not 1 <= software_limit <= _SOFTWARE_PAGE_MAX:
+            raise ValueError(f"software_limit must be between 1 and {_SOFTWARE_PAGE_MAX}")
         machine_id = await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
         data = await client.query(
             _GET_ASSET,
@@ -776,7 +810,13 @@ def register_read_tools(mcp: Any, client: TenableClient, _audit: AuditLog) -> No
                 variables={"id": asset_id},
                 icp_machine_id=machine_id,
             )
-            asset["host"] = _project_host_details((det.get("asset") or {}).get("details"), wanted)
+            asset["host"] = _project_host_details(
+                (det.get("asset") or {}).get("details"),
+                wanted,
+                software_offset=software_offset,
+                software_limit=software_limit,
+                software_search=software_search,
+            )
         except TenableError as exc:
             asset["host"] = None
             asset["host_error"] = str(exc)[:300]

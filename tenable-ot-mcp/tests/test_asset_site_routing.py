@@ -492,3 +492,41 @@ async def test_get_asset_survives_details_query_failure() -> None:
     assert result["asset"]["id"] == "h-1"
     assert result["asset"]["host"] is None
     assert result["asset"]["host_error"] == "boom"
+
+
+def test_host_software_is_paged_and_searchable() -> None:
+    from tenable_ot_mcp.tools.assets import _project_host_details
+
+    details = {
+        "windows": {
+            "installedSoftware": [
+                {"name": f"Rockwell Profile {i}", "version": "1", "installDate": "x"}
+                for i in range(250)
+            ]
+            + [{"name": "TightVNC", "version": "2.8", "installDate": "y"}]
+        }
+    }
+    inc = frozenset({"software"})
+
+    p1 = _project_host_details(details, inc, software_offset=0, software_limit=100)["windows"]
+    assert (len(p1["installed_software"]), p1["software_match_count"]) == (100, 251)
+    assert p1["software_next_offset"] == 100
+
+    p3 = _project_host_details(details, inc, software_offset=200, software_limit=100)["windows"]
+    assert len(p3["installed_software"]) == 51
+    assert p3["software_next_offset"] is None
+    assert p3["installed_software"][-1]["name"] == "TightVNC"
+
+    hit = _project_host_details(details, inc, software_search="tightvnc")["windows"]
+    assert [s["name"] for s in hit["installed_software"]] == ["TightVNC"]
+    assert hit["software_match_count"] == 1 and hit["software_next_offset"] is None
+    assert hit["software_count"] == 251  # unfiltered total is always reported
+
+
+async def test_get_asset_rejects_bad_software_paging() -> None:
+    client = FakeClient([])
+    mcp = FakeMCP()
+    register_read_tools(mcp, client, None)  # type: ignore[arg-type]
+    for kwargs in ({"software_offset": -1}, {"software_limit": 0}, {"software_limit": 201}):
+        with pytest.raises(ValueError):
+            await mcp.tools["get_asset"](asset_id="a", site_uuid="s", **kwargs)
